@@ -37,10 +37,22 @@ A Chrome extension that enhances your [D&D Beyond](https://www.dndbeyond.com) ex
 
 ## Development
 
-The extension is built with plain HTML, CSS, and JavaScript — no build step required.
+The extension is built with plain HTML, CSS, and JavaScript, so you can load it unpacked directly during development.
+
+## Packaging
+
+To create a distributable zip for Chrome, run the PowerShell build script from the project root:
+
+```powershell
+.\build.ps1
+```
+
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-1.0.0.zip`.
 
 ```
 further-beyond/
+├── build.ps1              # Creates a versioned extension zip in dist/
+├── dist/                  # Generated build output (ignored by git)
 ├── manifest.json          # Extension manifest (Manifest V3)
 ├── popup/
 │   ├── popup.html         # Popup UI
