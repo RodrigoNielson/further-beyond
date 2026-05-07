@@ -33,7 +33,7 @@
     indicator.setAttribute("role", "img");
     indicator.setAttribute("aria-label", "Further Beyond is active");
 
-    icon.src = chrome.runtime.getURL("icons/icon32.png");
+    icon.src = chrome.runtime.getURL("icons/wizard.png");
     icon.alt = "";
 
     indicator.appendChild(icon);
