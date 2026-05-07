@@ -1,6 +1,6 @@
 /* =============================================
    Further Beyond – Content Script
-   Adds an active indicator to D&D Beyond character sheets
+   Adds an active indicator and slot-based inventory tracking
    ============================================= */
 
 (function () {
@@ -9,15 +9,31 @@
   if (!window.location.pathname.startsWith("/characters/")) return;
 
   const INDICATOR_ID = "fb-active-indicator";
-  const SLOT_SUMMARY_ID = "fb-slot-summary";
   const CONTAINER_BADGE_CLASS = "fb-container-slot-badge";
   const SPEED_PENALTY_ID = "fb-speed-penalty";
   const SPEED_WARNING_ID = "fb-speed-warning";
+  const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
+  const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
+  const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
   const HEADING_SELECTORS = [
     "main .ddbc-character-tidbits__heading h1",
     "main h1.styles_characterName__2x8wQ",
     "main h1",
   ];
+  const inventorySnapshot = {
+    characterKey: getCharacterKey(),
+    containers: [],
+    usedSlots: null,
+    capacity: null,
+  };
+  const pageBridgeState = {
+    bridgePromise: null,
+    listenerBound: false,
+    pendingRequests: new Map(),
+    activeInventoryPromise: null,
+  };
+
+  let refreshPending = false;
 
   function findCharacterHeading() {
     for (const selector of HEADING_SELECTORS) {
@@ -165,6 +181,121 @@
     return window.location.pathname.split("/")[2] || "";
   }
 
+  function ensurePageBridge() {
+    if (pageBridgeState.bridgePromise) {
+      return pageBridgeState.bridgePromise;
+    }
+
+    pageBridgeState.bridgePromise = new Promise((resolve, reject) => {
+      let script = document.getElementById(PAGE_BRIDGE_SCRIPT_ID);
+      if (script?.dataset.loaded === "true") {
+        resolve();
+        return;
+      }
+
+      const handleLoad = () => {
+        script.dataset.loaded = "true";
+        resolve();
+      };
+      const handleError = () => {
+        pageBridgeState.bridgePromise = null;
+        reject(new Error("The page inventory bridge could not be injected."));
+      };
+
+      if (!script) {
+        script = document.createElement("script");
+        script.id = PAGE_BRIDGE_SCRIPT_ID;
+        script.src = chrome.runtime.getURL("content/page-bridge.js");
+        script.async = false;
+        script.addEventListener("load", handleLoad, { once: true });
+        script.addEventListener("error", handleError, { once: true });
+        (document.documentElement || document.head || document.body).appendChild(
+          script
+        );
+        return;
+      }
+
+      script.addEventListener("load", handleLoad, { once: true });
+      script.addEventListener("error", handleError, { once: true });
+    });
+
+    return pageBridgeState.bridgePromise;
+  }
+
+  function handleInventorySnapshotResponse(event) {
+    const detail = event.detail || {};
+    const pending = pageBridgeState.pendingRequests.get(detail.requestId);
+    if (!pending) {
+      return;
+    }
+
+    window.clearTimeout(pending.timeoutId);
+    pageBridgeState.pendingRequests.delete(detail.requestId);
+
+    if (detail.ok) {
+      pending.resolve(detail.snapshot || null);
+      return;
+    }
+
+    pending.reject(new Error(detail.error || "The inventory bridge failed."));
+  }
+
+  function ensureInventoryBridgeListener() {
+    if (pageBridgeState.listenerBound) {
+      return;
+    }
+
+    window.addEventListener(
+      INVENTORY_RESPONSE_EVENT,
+      handleInventorySnapshotResponse
+    );
+    pageBridgeState.listenerBound = true;
+  }
+
+  async function requestInventorySnapshot() {
+    ensureInventoryBridgeListener();
+    await ensurePageBridge();
+
+    return new Promise((resolve, reject) => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timeoutId = window.setTimeout(() => {
+        pageBridgeState.pendingRequests.delete(requestId);
+        reject(new Error("The inventory bridge timed out."));
+      }, 3000);
+
+      pageBridgeState.pendingRequests.set(requestId, {
+        resolve,
+        reject,
+        timeoutId,
+      });
+
+      window.dispatchEvent(
+        new CustomEvent(INVENTORY_REQUEST_EVENT, {
+          detail: { requestId },
+        })
+      );
+    });
+  }
+
+  async function getPageInventorySnapshot() {
+    if (pageBridgeState.activeInventoryPromise) {
+      return pageBridgeState.activeInventoryPromise;
+    }
+
+    pageBridgeState.activeInventoryPromise = requestInventorySnapshot().finally(() => {
+      pageBridgeState.activeInventoryPromise = null;
+    });
+
+    return pageBridgeState.activeInventoryPromise;
+  }
+
+  function resetInventorySnapshot(characterKey) {
+    inventorySnapshot.characterKey = characterKey;
+    inventorySnapshot.containers = [];
+    inventorySnapshot.usedSlots = null;
+    inventorySnapshot.capacity = null;
+  }
+
   function isUnfilteredInventoryView(inventoryRoot) {
     const allFilter = inventoryRoot.querySelector('[data-testid="tab-filter-all"]');
     const searchInput = inventoryRoot.querySelector(".ct-inventory-filter__input");
@@ -193,42 +324,6 @@
     });
 
     return merged;
-  }
-
-  function createSlotSummary() {
-    const summary = document.createElement("div");
-    const heading = document.createElement("div");
-    const label = document.createElement("span");
-    const value = document.createElement("span");
-    const detail = document.createElement("div");
-    const warning = document.createElement("div");
-    const breakdown = document.createElement("div");
-
-    summary.id = SLOT_SUMMARY_ID;
-    summary.className = "fb-slot-summary";
-
-    heading.className = "fb-slot-summary__heading";
-
-    label.className = "fb-slot-summary__label";
-    label.textContent = "Item Slots";
-
-    value.className = "fb-slot-summary__value";
-
-    detail.className = "fb-slot-summary__detail";
-
-    warning.className = SLOT_WARNING_CLASS;
-    warning.hidden = true;
-
-    breakdown.className = "fb-slot-summary__breakdown";
-
-    heading.appendChild(label);
-    heading.appendChild(value);
-    summary.appendChild(heading);
-    summary.appendChild(detail);
-    summary.appendChild(warning);
-    summary.appendChild(breakdown);
-
-    return summary;
   }
 
   function createSlotOverview() {
@@ -392,29 +487,8 @@
     speedBox.style.setProperty("--fb-speed-ring", ringColor);
     speedBox.style.setProperty("--fb-speed-color", speedColor);
 
-    let penaltyNote = speedBox.querySelector(`#${SPEED_PENALTY_ID}`);
-    if (!penaltyNote) {
-      penaltyNote = document.createElement("div");
-      penaltyNote.id = SPEED_PENALTY_ID;
-      penaltyNote.className = "fb-speed-box__penalty";
-      speedBox.appendChild(penaltyNote);
-    }
-
-    penaltyNote.textContent = `Speed penalty: -${penalty} ft.`;
-
-    let warning = speedBox.querySelector(`#${SPEED_WARNING_ID}`);
-    if (adjustedSpeed === 0) {
-      if (!warning) {
-        warning = document.createElement("div");
-        warning.id = SPEED_WARNING_ID;
-        warning.className = "fb-speed-box__warning";
-        speedBox.appendChild(warning);
-      }
-
-      warning.textContent = "Overencumbered: speed reduced to 0 ft.";
-    } else {
-      warning?.remove();
-    }
+    speedBox.querySelector(`#${SPEED_PENALTY_ID}`)?.remove();
+    speedBox.querySelector(`#${SPEED_WARNING_ID}`)?.remove();
 
     return {
       baseSpeed,
@@ -422,6 +496,26 @@
       penalty,
       intensity,
     };
+  }
+
+  function applyStoredSpeedPenalty(characterKey) {
+    if (inventorySnapshot.characterKey !== characterKey) {
+      resetInventorySnapshot(characterKey);
+      resetSpeedPenalty();
+      return false;
+    }
+
+    if (
+      !Number.isFinite(inventorySnapshot.usedSlots) ||
+      !Number.isFinite(inventorySnapshot.capacity)
+    ) {
+      return false;
+    }
+
+    updateSpeedPenalty(
+      Math.max(inventorySnapshot.usedSlots - inventorySnapshot.capacity, 0)
+    );
+    return true;
   }
 
   function upsertContainerBadge(container) {
@@ -445,27 +539,53 @@
       : `${container.name} is excluded from container-slot cost.`;
   }
 
-  function mountInventorySlots() {
+  async function mountInventorySlots() {
+    const characterKey = getCharacterKey();
+    if (inventorySnapshot.characterKey !== characterKey) {
+      resetInventorySnapshot(characterKey);
+    }
+
+    let pageSnapshot = null;
+    try {
+      pageSnapshot = await getPageInventorySnapshot();
+    } catch (error) {
+      pageSnapshot = null;
+    }
+
+    if (pageSnapshot?.characterKey === characterKey) {
+      inventorySnapshot.usedSlots = pageSnapshot.usedSlots;
+      inventorySnapshot.capacity = pageSnapshot.capacity;
+    }
+
     const inventoryRoot = document.querySelector(".ct-equipment");
     if (!inventoryRoot) {
-      resetSpeedPenalty();
+      if (
+        pageSnapshot?.characterKey === characterKey &&
+        Number.isFinite(pageSnapshot.usedSlots) &&
+        Number.isFinite(pageSnapshot.capacity)
+      ) {
+        updateSpeedPenalty(
+          Math.max(pageSnapshot.usedSlots - pageSnapshot.capacity, 0)
+        );
+      } else {
+        applyStoredSpeedPenalty(characterKey);
+      }
       return false;
     }
 
     const overview = inventoryRoot.querySelector(".ct-equipment__overview");
     if (!overview) return false;
 
-    const capacity = getStrengthCapacity();
-    if (!Number.isFinite(capacity)) return false;
+    const capacity = Number.isFinite(pageSnapshot?.capacity)
+      ? pageSnapshot.capacity
+      : getStrengthCapacity();
+    if (!Number.isFinite(capacity)) {
+      applyStoredSpeedPenalty(characterKey);
+      return false;
+    }
 
     const visibleContainers = collectInventoryContainers();
-    const characterKey = getCharacterKey();
     const isUnfiltered = isUnfilteredInventoryView(inventoryRoot);
-
-    if (inventorySnapshot.characterKey !== characterKey) {
-      inventorySnapshot.characterKey = characterKey;
-      inventorySnapshot.containers = [];
-    }
 
     if (isUnfiltered) {
       inventorySnapshot.containers = cloneContainerData(visibleContainers);
@@ -474,13 +594,19 @@
     const containers = isUnfiltered
       ? visibleContainers
       : mergeContainerSnapshots(inventorySnapshot.containers, visibleContainers);
-    const usedSlots = containers.reduce(
+    const domUsedSlots = containers.reduce(
       (total, container) => total + container.slotCount,
       0
     );
+    const usedSlots = Number.isFinite(pageSnapshot?.usedSlots)
+      ? pageSnapshot.usedSlots
+      : domUsedSlots;
     const overBy = Math.max(usedSlots - capacity, 0);
     const speedPenaltyState = updateSpeedPenalty(overBy);
-    document.getElementById(SLOT_SUMMARY_ID)?.remove();
+
+    inventorySnapshot.usedSlots = usedSlots;
+    inventorySnapshot.capacity = capacity;
+
     updateSlotOverviewButton(overview, usedSlots, capacity, overBy, speedPenaltyState);
 
     visibleContainers.forEach((container) => {
@@ -500,23 +626,21 @@
     return true;
   }
 
-  const inventorySnapshot = {
-    characterKey: getCharacterKey(),
-    containers: [],
-  };
-
-  let refreshPending = false;
-
-  function refreshUi() {
+  async function refreshUi() {
     refreshPending = false;
     mountIndicator();
-    mountInventorySlots();
+    await mountInventorySlots();
   }
 
   function scheduleRefresh() {
     if (refreshPending) return;
     refreshPending = true;
-    window.requestAnimationFrame(refreshUi);
+    window.requestAnimationFrame(() => {
+      Promise.resolve(refreshUi()).catch((error) => {
+        refreshPending = false;
+        console.error("[Further Beyond] UI refresh failed.", error);
+      });
+    });
   }
 
   const observer = new MutationObserver(() => {
@@ -530,6 +654,12 @@
     "pagehide",
     () => {
       observer.disconnect();
+      if (pageBridgeState.listenerBound) {
+        window.removeEventListener(
+          INVENTORY_RESPONSE_EVENT,
+          handleInventorySnapshotResponse
+        );
+      }
     },
     { once: true }
   );

@@ -1,0 +1,133 @@
+(function () {
+  "use strict";
+
+  if (window.__fbPageBridgeInstalled) {
+    return;
+  }
+
+  window.__fbPageBridgeInstalled = true;
+
+  const REQUEST_EVENT = "fb:inventory-request";
+  const RESPONSE_EVENT = "fb:inventory-response";
+  const bridgeState = {
+    requireFn: null,
+    rulesConfigModule: null,
+  };
+
+  function getWebpackRequire() {
+    if (bridgeState.requireFn) {
+      return bridgeState.requireFn;
+    }
+
+    const chunk = window.webpackChunk_dndbeyond_character_app;
+    if (!Array.isArray(chunk)) {
+      return null;
+    }
+
+    let capturedRequire = null;
+    chunk.push([[Symbol("fb-page-bridge")], {}, (requireFn) => {
+      capturedRequire = requireFn;
+    }]);
+
+    bridgeState.requireFn = capturedRequire;
+    return bridgeState.requireFn;
+  }
+
+  function getRulesConfigModule(requireFn) {
+    if (bridgeState.rulesConfigModule) {
+      return bridgeState.rulesConfigModule;
+    }
+
+    for (const [id, factory] of Object.entries(requireFn.m || {})) {
+      const source = String(factory);
+      if (
+        source.includes("configureRulesEngine") &&
+        source.includes("getCurrentRulesEngineConfig") &&
+        source.includes("messageBroker")
+      ) {
+        bridgeState.rulesConfigModule = requireFn(id);
+        return bridgeState.rulesConfigModule;
+      }
+    }
+
+    return null;
+  }
+
+  function getCurrentRulesConfig() {
+    const requireFn = getWebpackRequire();
+    if (!requireFn) {
+      return null;
+    }
+
+    const rulesConfigModule = getRulesConfigModule(requireFn);
+    if (!rulesConfigModule || typeof rulesConfigModule.getCurrentRulesEngineConfig !== "function") {
+      return null;
+    }
+
+    return rulesConfigModule.getCurrentRulesEngineConfig();
+  }
+
+  function getEffectiveStat(character, statId) {
+    const baseStat = Array.isArray(character?.stats)
+      ? character.stats.find((stat) => stat.id === statId)
+      : null;
+    const bonusStat = Array.isArray(character?.bonusStats)
+      ? character.bonusStats.find((stat) => stat.id === statId)
+      : null;
+    const overrideStat = Array.isArray(character?.overrideStats)
+      ? character.overrideStats.find((stat) => stat.id === statId)
+      : null;
+
+    if (Number.isFinite(overrideStat?.value)) {
+      return overrideStat.value;
+    }
+
+    const baseValue = Number.isFinite(baseStat?.value) ? baseStat.value : null;
+    const bonusValue = Number.isFinite(bonusStat?.value) ? bonusStat.value : 0;
+
+    return Number.isFinite(baseValue) ? baseValue + bonusValue : null;
+  }
+
+  function createInventorySnapshot() {
+    const character = getCurrentRulesConfig()?.store?.getState?.()?.character;
+    const inventory = Array.isArray(character?.inventory) ? character.inventory : [];
+    const usedSlots = inventory.filter((item) => !item?.definition?.isContainer).length;
+    const strengthScore = getEffectiveStat(character, 1);
+
+    return {
+      characterKey: String(character?.id || ""),
+      usedSlots,
+      capacity: Number.isFinite(strengthScore) ? strengthScore + 8 : null,
+    };
+  }
+
+  function dispatchResponse(requestId, detail) {
+    window.dispatchEvent(
+      new CustomEvent(RESPONSE_EVENT, {
+        detail: {
+          requestId,
+          ...detail,
+        },
+      })
+    );
+  }
+
+  window.addEventListener(REQUEST_EVENT, (event) => {
+    const detail = event.detail || {};
+    if (!detail.requestId) {
+      return;
+    }
+
+    try {
+      dispatchResponse(detail.requestId, {
+        ok: true,
+        snapshot: createInventorySnapshot(),
+      });
+    } catch (error) {
+      dispatchResponse(detail.requestId, {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+})();
