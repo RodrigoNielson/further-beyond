@@ -11,6 +11,9 @@
   const INDICATOR_ID = "fb-active-indicator";
   const SLOT_SUMMARY_ID = "fb-slot-summary";
   const CONTAINER_BADGE_CLASS = "fb-container-slot-badge";
+  const SLOT_WARNING_CLASS = "fb-slot-summary__warning";
+  const SPEED_PENALTY_ID = "fb-speed-penalty";
+  const SPEED_WARNING_ID = "fb-speed-warning";
   const HEADING_SELECTORS = [
     "main .ddbc-character-tidbits__heading h1",
     "main h1.styles_characterName__2x8wQ",
@@ -66,6 +69,19 @@
 
     const value = parseInt(match[0], 10);
     return Number.isFinite(value) ? value : null;
+  }
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function mixColor(startColor, endColor, amount, alpha) {
+    const intensity = clamp(amount, 0, 1);
+    const channel = startColor.map((value, index) => {
+      return Math.round(value + (endColor[index] - value) * intensity);
+    });
+
+    return `rgba(${channel[0]}, ${channel[1]}, ${channel[2]}, ${alpha})`;
   }
 
   function getStrengthCapacity() {
@@ -186,6 +202,7 @@
     const label = document.createElement("span");
     const value = document.createElement("span");
     const detail = document.createElement("div");
+    const warning = document.createElement("div");
     const breakdown = document.createElement("div");
 
     summary.id = SLOT_SUMMARY_ID;
@@ -200,15 +217,128 @@
 
     detail.className = "fb-slot-summary__detail";
 
+    warning.className = SLOT_WARNING_CLASS;
+    warning.hidden = true;
+
     breakdown.className = "fb-slot-summary__breakdown";
 
     heading.appendChild(label);
     heading.appendChild(value);
     summary.appendChild(heading);
     summary.appendChild(detail);
+    summary.appendChild(warning);
     summary.appendChild(breakdown);
 
     return summary;
+  }
+
+  function getSpeedBoxState() {
+    const speedBox = document.querySelector(".ct-speed-box");
+    if (!speedBox) return null;
+
+    const numberSpan = speedBox.querySelector(
+      ".ct-speed-box__box-value .styles_numberDisplay__Rg1za > span"
+    );
+    if (!numberSpan) return null;
+
+    if (!speedBox.dataset.fbBaseSpeed) {
+      const baseSpeed = parseInteger(numberSpan.textContent);
+      if (!Number.isFinite(baseSpeed)) {
+        return null;
+      }
+
+      speedBox.dataset.fbBaseSpeed = String(baseSpeed);
+    }
+
+    const baseSpeed = parseInteger(speedBox.dataset.fbBaseSpeed);
+    if (!Number.isFinite(baseSpeed)) {
+      return null;
+    }
+
+    return {
+      speedBox,
+      numberSpan,
+      baseSpeed,
+    };
+  }
+
+  function resetSpeedPenalty() {
+    const speedState = getSpeedBoxState();
+    if (!speedState) return;
+
+    const { speedBox, numberSpan, baseSpeed } = speedState;
+    numberSpan.textContent = String(baseSpeed);
+    speedBox.dataset.fbSpeedState = "ok";
+    speedBox.style.removeProperty("--fb-speed-ring");
+    speedBox.style.removeProperty("--fb-speed-color");
+
+    speedBox.querySelector(`#${SPEED_PENALTY_ID}`)?.remove();
+    speedBox.querySelector(`#${SPEED_WARNING_ID}`)?.remove();
+  }
+
+  function updateSpeedPenalty(overBy) {
+    const speedState = getSpeedBoxState();
+    if (!speedState) {
+      return null;
+    }
+
+    const { speedBox, numberSpan, baseSpeed } = speedState;
+    const extraSlots = Math.max(overBy, 0);
+
+    if (extraSlots === 0) {
+      resetSpeedPenalty();
+      return {
+        baseSpeed,
+        adjustedSpeed: baseSpeed,
+        penalty: 0,
+        intensity: 0,
+      };
+    }
+
+    const penalty = extraSlots * 5;
+    const adjustedSpeed = Math.max(baseSpeed - penalty, 0);
+    const stopThreshold = Math.max(Math.ceil(baseSpeed / 5), 1);
+    const intensity = clamp(extraSlots / stopThreshold, 0, 1);
+    const speedColor = mixColor([160, 82, 17], [179, 35, 24], intensity, 1);
+    const ringColor = mixColor([221, 151, 14], [197, 49, 49], intensity, 0.42);
+
+    numberSpan.textContent = String(adjustedSpeed);
+    speedBox.dataset.fbSpeedState = adjustedSpeed === 0 ? "stopped" : "penalized";
+    speedBox.style.setProperty("--fb-speed-ring", ringColor);
+    speedBox.style.setProperty("--fb-speed-color", speedColor);
+
+    let penaltyNote = speedBox.querySelector(`#${SPEED_PENALTY_ID}`);
+    if (!penaltyNote) {
+      penaltyNote = document.createElement("div");
+      penaltyNote.id = SPEED_PENALTY_ID;
+      penaltyNote.className = "fb-speed-box__penalty";
+      speedBox.appendChild(penaltyNote);
+    }
+
+    penaltyNote.textContent = `-${penalty} ft. from ${extraSlots} extra ${
+      extraSlots === 1 ? "slot" : "slots"
+    }.`;
+
+    let warning = speedBox.querySelector(`#${SPEED_WARNING_ID}`);
+    if (adjustedSpeed === 0) {
+      if (!warning) {
+        warning = document.createElement("div");
+        warning.id = SPEED_WARNING_ID;
+        warning.className = "fb-speed-box__warning";
+        speedBox.appendChild(warning);
+      }
+
+      warning.textContent = "Overencumbered: speed reduced to 0 ft.";
+    } else {
+      warning?.remove();
+    }
+
+    return {
+      baseSpeed,
+      adjustedSpeed,
+      penalty,
+      intensity,
+    };
   }
 
   function upsertContainerBadge(container) {
@@ -234,7 +364,10 @@
 
   function mountInventorySlots() {
     const inventoryRoot = document.querySelector(".ct-equipment");
-    if (!inventoryRoot) return false;
+    if (!inventoryRoot) {
+      resetSpeedPenalty();
+      return false;
+    }
 
     const overview = inventoryRoot.querySelector(".ct-equipment__overview");
     if (!overview) return false;
@@ -262,6 +395,8 @@
       (total, container) => total + container.slotCount,
       0
     );
+    const overBy = Math.max(usedSlots - capacity, 0);
+    const speedPenaltyState = updateSpeedPenalty(overBy);
     let summary = document.getElementById(SLOT_SUMMARY_ID);
     if (!summary) {
       summary = createSlotSummary();
@@ -269,15 +404,60 @@
     }
 
     summary.dataset.state =
-      usedSlots > capacity ? "over" : usedSlots >= capacity ? "full" : "ok";
+      speedPenaltyState?.adjustedSpeed === 0 && overBy > 0
+        ? "stopped"
+        : usedSlots > capacity
+          ? "over"
+          : usedSlots >= capacity
+            ? "full"
+            : "ok";
 
     const value = summary.querySelector(".fb-slot-summary__value");
     const detail = summary.querySelector(".fb-slot-summary__detail");
+    const warning = summary.querySelector(`.${SLOT_WARNING_CLASS}`);
     const breakdown = summary.querySelector(".fb-slot-summary__breakdown");
 
     value.textContent = `${usedSlots} / ${capacity}`;
-    detail.textContent =
-      "Every item row counts, including Equipment. Containers do not spend slots themselves.";
+    if (overBy > 0 && speedPenaltyState) {
+      detail.textContent = `Over max by ${overBy}. Speed penalty: -${speedPenaltyState.penalty} ft.`;
+    } else {
+      detail.textContent =
+        "Every item row counts, including Equipment. Containers do not spend slots themselves.";
+    }
+
+    if (speedPenaltyState && overBy > 0) {
+      summary.style.setProperty(
+        "--fb-summary-border-color",
+        mixColor([221, 151, 14], [197, 49, 49], speedPenaltyState.intensity, 0.58)
+      );
+      summary.style.setProperty(
+        "--fb-summary-bg-top",
+        mixColor([255, 248, 237], [255, 230, 223], speedPenaltyState.intensity, 0.98)
+      );
+      summary.style.setProperty(
+        "--fb-summary-bg-bottom",
+        mixColor([244, 233, 213], [255, 214, 206], speedPenaltyState.intensity, 0.95)
+      );
+      summary.style.setProperty(
+        "--fb-summary-value-color",
+        mixColor([18, 24, 28], [151, 27, 27], speedPenaltyState.intensity, 1)
+      );
+    } else {
+      summary.style.removeProperty("--fb-summary-border-color");
+      summary.style.removeProperty("--fb-summary-bg-top");
+      summary.style.removeProperty("--fb-summary-bg-bottom");
+      summary.style.removeProperty("--fb-summary-value-color");
+    }
+
+    if (warning) {
+      if (speedPenaltyState?.adjustedSpeed === 0 && overBy > 0) {
+        warning.hidden = false;
+        warning.textContent = "Overencumbered: speed reduced to 0 ft.";
+      } else {
+        warning.hidden = true;
+        warning.textContent = "";
+      }
+    }
 
     breakdown.replaceChildren();
 
