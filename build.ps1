@@ -22,12 +22,9 @@ if (Test-Path $zipPath) {
 $itemsToPackage = @(
     "manifest.json",
     "README.md",
-    "background",
     "content",
-    "icons",
-    "popup",
-    "shared"
-)
+    "icons"
+) | Where-Object { Test-Path $_ }
 
 Compress-Archive -Path $itemsToPackage -DestinationPath $zipPath -Force
 Write-Output "Built extension package: $zipPath"

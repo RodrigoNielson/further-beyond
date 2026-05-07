@@ -1,183 +1,25 @@
 /* =============================================
    Further Beyond – Content Script Styles
-   Floating dice button and overlay on D&D Beyond
+   Character sheet active indicator
    ============================================= */
 
-#fb-dice-fab {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  z-index: 999999;
-  width: 52px;
-  height: 52px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #c53131 0%, #8b1a1a 100%);
-  border: 2px solid #e8c47c;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), 0 0 0 0 rgba(197, 49, 49, 0.4);
-  cursor: pointer;
-  display: flex;
+#fb-active-indicator {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.2s, box-shadow 0.2s;
-  font-size: 22px;
-  user-select: none;
+  width: 22px;
+  height: 22px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: rgba(33, 26, 18, 0.7);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.22), 0 2px 6px rgba(0, 0, 0, 0.28);
+  flex-shrink: 0;
+  overflow: hidden;
+  vertical-align: text-bottom;
 }
 
-#fb-dice-fab:hover {
-  transform: scale(1.1);
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7), 0 0 0 6px rgba(197, 49, 49, 0.2);
-}
-
-#fb-dice-fab:active {
-  transform: scale(0.96);
-}
-
-#fb-dice-fab.fb-rolling {
-  animation: fb-shake 0.4s ease;
-}
-
-@keyframes fb-shake {
-  0%, 100% { transform: rotate(0deg) scale(1); }
-  20%       { transform: rotate(-15deg) scale(1.1); }
-  60%       { transform: rotate(15deg) scale(1.1); }
-  80%       { transform: rotate(-8deg) scale(1.05); }
-}
-
-/* ---- Quick Roller Panel ---- */
-#fb-quick-panel {
-  position: fixed;
-  bottom: 86px;
-  right: 24px;
-  z-index: 999998;
-  background: #1a1a2e;
-  border: 1px solid #3a2a1a;
-  border-radius: 10px;
-  padding: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
-  width: 220px;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  animation: fb-slideUp 0.2s ease;
-}
-
-@keyframes fb-slideUp {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-#fb-quick-panel.fb-hidden {
-  display: none;
-}
-
-.fb-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #3a2a1a;
-}
-
-.fb-panel-title {
-  color: #c8a45c;
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-}
-
-.fb-panel-close {
-  background: transparent;
-  border: none;
-  color: #7a6a5a;
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-}
-
-.fb-panel-close:hover {
-  color: #c53131;
-}
-
-.fb-dice-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
-}
-
-.fb-die {
-  padding: 7px 8px;
-  background: #0f3460;
-  border: 1px solid #1a3a6e;
-  border-radius: 5px;
-  color: #f0e6d3;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
-  flex: 1;
-  text-align: center;
-}
-
-.fb-die:hover {
-  background: #1a4a8e;
-  border-color: #c8a45c;
-  color: #e8c47c;
-}
-
-.fb-die:active {
-  transform: scale(0.9);
-}
-
-.fb-die.fb-d20 {
-  background: #4a1010;
-  border-color: #c53131;
-  color: #ff9090;
-}
-
-.fb-die.fb-d20:hover {
-  background: #c53131;
-  color: white;
-}
-
-.fb-result-area {
-  background: #0f3460;
-  border: 1px solid #1a3a6e;
-  border-radius: 6px;
-  padding: 8px;
-  text-align: center;
-  min-height: 52px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-.fb-result-label {
-  font-size: 10px;
-  color: #7a6a5a;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  margin-bottom: 4px;
-}
-
-.fb-result-value {
-  font-size: 28px;
-  font-weight: 900;
-  color: #e8c47c;
-  line-height: 1;
-}
-
-.fb-result-detail {
-  font-size: 10px;
-  color: #a89880;
-  margin-top: 3px;
-}
-
-.fb-result-value.fb-crit {
-  color: #ffd700;
-}
-
-.fb-result-value.fb-fumble {
-  color: #c53131;
+#fb-active-indicator img {
+  display: block;
+  width: 18px;
+  height: 18px;
 }

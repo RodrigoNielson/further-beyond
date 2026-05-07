@@ -1,31 +1,12 @@
 # Further Beyond
 
-A Chrome extension that enhances your [D&D Beyond](https://www.dndbeyond.com) experience with quick-access tools for dice rolling, condition tracking, and spell slot management.
+A Chrome extension that adds a small active indicator beside the character name on D&D Beyond character sheets.
 
 ## Features
 
-### 🎲 Dice Roller
-- Roll any die: **d4, d6, d8, d10, d12, d20, d%**
-- Set the number of dice and a modifier (+/−)
-- See the full breakdown of each roll
-- Automatic **Critical** and **Fumble** detection on d20 rolls
-- Persistent roll history (last 20 rolls saved across sessions)
-
-### ⚠️ Condition Tracker
-- Toggle all 15 D&D 5e conditions on/off:
-  - Blinded, Charmed, Deafened, Exhaustion, Frightened, Grappled, Incapacitated, Invisible, Paralyzed, Petrified, Poisoned, Prone, Restrained, Stunned, Unconscious
-- State persists between browser sessions
-
-### ✨ Spell Slot Tracker
-- Track spell slots for all 9 spell levels
-- Set your max slots per level and use/restore them with +/− buttons
-- Visual pip indicators for remaining slots
-- "Reset All Slots" restores everything to max
-
-### ⚔ Floating Quick-Roll Button (D&D Beyond Only)
-- A floating action button appears on every D&D Beyond page
-- Click it to open a quick dice panel with d4–d20 and d%
-- Critical and Fumble results are highlighted
+- Shows a small Further Beyond icon immediately to the left of the character name.
+- Only runs on D&D Beyond character pages under `https://www.dndbeyond.com/characters/*`.
+- Uses the existing extension icon assets for the page indicator.
 
 ## Installation
 
@@ -47,26 +28,19 @@ To create a distributable zip for Chrome, run the PowerShell build script from t
 .\build.ps1
 ```
 
-This creates a versioned zip file in `dist/`, for example `dist/further-beyond-1.0.0.zip`.
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.2.zip`.
 
 ```
 further-beyond/
 ├── build.ps1              # Creates a versioned extension zip in dist/
 ├── dist/                  # Generated build output (ignored by git)
 ├── manifest.json          # Extension manifest (Manifest V3)
-├── popup/
-│   ├── popup.html         # Popup UI
-│   ├── popup.css          # Popup styles
-│   └── popup.js           # Dice roller, conditions, spell slots logic
 ├── content/
-│   ├── content.js         # Content script injected on dndbeyond.com
-│   └── content.css        # Styles for the floating quick-roll button
-├── background/
-│   └── service-worker.js  # Background service worker
+│   ├── content.js         # Injects the active indicator on character sheets
+│   └── content.css        # Styles for the inline active indicator
 └── icons/                 # Extension icons (16, 32, 48, 128 px)
 ```
 
 ## Permissions
 
-- **`storage`** – Persists your roll history, active conditions, and spell slot counts.
-- **`https://www.dndbeyond.com/*`** – Injects the floating quick-roll button on D&D Beyond pages.
+- **`https://www.dndbeyond.com/characters/*`** – Injects the active indicator on D&D Beyond character sheets.
