@@ -1,12 +1,16 @@
 # Further Beyond
 
-A Chrome extension that adds a small active indicator beside the character name on D&D Beyond character sheets.
+A Chrome extension that adds a small active indicator and slot-based inventory tracking on D&D Beyond character sheets.
 
 ## Features
 
 - Shows a small Further Beyond icon immediately to the left of the character name.
 - Only runs on D&D Beyond character pages under `https://www.dndbeyond.com/characters/*`.
-- Uses the existing extension icon assets for the page indicator.
+- Tracks inventory slots on the Inventory page.
+- Sets the slot maximum to `8 + Strength score`.
+- Counts each visible item row as 1 slot, including the Equipment section.
+- Containers never spend slots themselves; only the items inside them count.
+- Uses the uploaded wizard icon for the page indicator.
 
 ## Installation
 
