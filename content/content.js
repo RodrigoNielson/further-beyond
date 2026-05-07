@@ -11,7 +11,6 @@
   const INDICATOR_ID = "fb-active-indicator";
   const SLOT_SUMMARY_ID = "fb-slot-summary";
   const CONTAINER_BADGE_CLASS = "fb-container-slot-badge";
-  const SLOT_WARNING_CLASS = "fb-slot-summary__warning";
   const SPEED_PENALTY_ID = "fb-speed-penalty";
   const SPEED_WARNING_ID = "fb-speed-warning";
   const HEADING_SELECTORS = [
@@ -232,6 +231,92 @@
     return summary;
   }
 
+  function createSlotOverview() {
+    const content = document.createElement("div");
+    const label = document.createElement("span");
+    const value = document.createElement("span");
+    const meta = document.createElement("span");
+
+    content.className = "fb-slot-overview";
+
+    label.className = "fb-slot-overview__label";
+    label.textContent = "Item Slots";
+
+    value.className = "fb-slot-overview__value";
+
+    meta.className = "fb-slot-overview__meta";
+    meta.hidden = true;
+
+    content.appendChild(label);
+    content.appendChild(value);
+    content.appendChild(meta);
+
+    return content;
+  }
+
+  function updateSlotOverviewButton(overview, usedSlots, capacity, overBy, speedPenaltyState) {
+    const button = overview.querySelector(".styles_overviewPrimaryButton__j84A5, button");
+    if (!button) return;
+
+    button.classList.add("fb-slot-overview-button");
+
+    let content = button.querySelector(".fb-slot-overview");
+    if (!content) {
+      content = createSlotOverview();
+      button.replaceChildren(content);
+    }
+
+    const value = content.querySelector(".fb-slot-overview__value");
+    const meta = content.querySelector(".fb-slot-overview__meta");
+    const intensity = speedPenaltyState?.intensity ?? 0;
+
+    value.textContent = `${usedSlots} / ${capacity}`;
+
+    if (overBy > 0 && speedPenaltyState) {
+      meta.hidden = false;
+      meta.textContent =
+        speedPenaltyState.adjustedSpeed === 0
+          ? "0 ft. speed"
+          : `-${speedPenaltyState.penalty} ft. speed`;
+      button.style.setProperty(
+        "--fb-slot-button-border",
+        mixColor([221, 151, 14], [197, 49, 49], intensity, 0.62)
+      );
+      button.style.setProperty(
+        "--fb-slot-button-bg-top",
+        mixColor([255, 248, 237], [255, 230, 223], intensity, 1)
+      );
+      button.style.setProperty(
+        "--fb-slot-button-bg-bottom",
+        mixColor([244, 233, 213], [255, 214, 206], intensity, 0.98)
+      );
+      button.style.setProperty(
+        "--fb-slot-button-value",
+        mixColor([18, 24, 28], [151, 27, 27], intensity, 1)
+      );
+    } else {
+      meta.hidden = true;
+      meta.textContent = "";
+      button.style.removeProperty("--fb-slot-button-border");
+      button.style.removeProperty("--fb-slot-button-bg-top");
+      button.style.removeProperty("--fb-slot-button-bg-bottom");
+      button.style.removeProperty("--fb-slot-button-value");
+    }
+
+    button.dataset.fbSlotState =
+      speedPenaltyState?.adjustedSpeed === 0 && overBy > 0
+        ? "stopped"
+        : usedSlots > capacity
+          ? "over"
+          : usedSlots >= capacity
+            ? "full"
+            : "ok";
+    button.title =
+      overBy > 0 && speedPenaltyState
+        ? `${usedSlots} / ${capacity} slots. Speed penalty: -${speedPenaltyState.penalty} ft.`
+        : `${usedSlots} / ${capacity} item slots used.`;
+  }
+
   function getSpeedBoxState() {
     const speedBox = document.querySelector(".ct-speed-box");
     if (!speedBox) return null;
@@ -315,9 +400,7 @@
       speedBox.appendChild(penaltyNote);
     }
 
-    penaltyNote.textContent = `-${penalty} ft. from ${extraSlots} extra ${
-      extraSlots === 1 ? "slot" : "slots"
-    }.`;
+    penaltyNote.textContent = `Speed penalty: -${penalty} ft.`;
 
     let warning = speedBox.querySelector(`#${SPEED_WARNING_ID}`);
     if (adjustedSpeed === 0) {
@@ -397,77 +480,8 @@
     );
     const overBy = Math.max(usedSlots - capacity, 0);
     const speedPenaltyState = updateSpeedPenalty(overBy);
-    let summary = document.getElementById(SLOT_SUMMARY_ID);
-    if (!summary) {
-      summary = createSlotSummary();
-      overview.insertAdjacentElement("afterend", summary);
-    }
-
-    summary.dataset.state =
-      speedPenaltyState?.adjustedSpeed === 0 && overBy > 0
-        ? "stopped"
-        : usedSlots > capacity
-          ? "over"
-          : usedSlots >= capacity
-            ? "full"
-            : "ok";
-
-    const value = summary.querySelector(".fb-slot-summary__value");
-    const detail = summary.querySelector(".fb-slot-summary__detail");
-    const warning = summary.querySelector(`.${SLOT_WARNING_CLASS}`);
-    const breakdown = summary.querySelector(".fb-slot-summary__breakdown");
-
-    value.textContent = `${usedSlots} / ${capacity}`;
-    if (overBy > 0 && speedPenaltyState) {
-      detail.textContent = `Over max by ${overBy}. Speed penalty: -${speedPenaltyState.penalty} ft.`;
-    } else {
-      detail.textContent =
-        "Every item row counts, including Equipment. Containers do not spend slots themselves.";
-    }
-
-    if (speedPenaltyState && overBy > 0) {
-      summary.style.setProperty(
-        "--fb-summary-border-color",
-        mixColor([221, 151, 14], [197, 49, 49], speedPenaltyState.intensity, 0.58)
-      );
-      summary.style.setProperty(
-        "--fb-summary-bg-top",
-        mixColor([255, 248, 237], [255, 230, 223], speedPenaltyState.intensity, 0.98)
-      );
-      summary.style.setProperty(
-        "--fb-summary-bg-bottom",
-        mixColor([244, 233, 213], [255, 214, 206], speedPenaltyState.intensity, 0.95)
-      );
-      summary.style.setProperty(
-        "--fb-summary-value-color",
-        mixColor([18, 24, 28], [151, 27, 27], speedPenaltyState.intensity, 1)
-      );
-    } else {
-      summary.style.removeProperty("--fb-summary-border-color");
-      summary.style.removeProperty("--fb-summary-bg-top");
-      summary.style.removeProperty("--fb-summary-bg-bottom");
-      summary.style.removeProperty("--fb-summary-value-color");
-    }
-
-    if (warning) {
-      if (speedPenaltyState?.adjustedSpeed === 0 && overBy > 0) {
-        warning.hidden = false;
-        warning.textContent = "Overencumbered: speed reduced to 0 ft.";
-      } else {
-        warning.hidden = true;
-        warning.textContent = "";
-      }
-    }
-
-    breakdown.replaceChildren();
-
-    containers.forEach((container) => {
-      const chip = document.createElement("span");
-      chip.className = "fb-slot-summary__chip";
-      chip.dataset.weightless = container.countsContainer ? "false" : "true";
-      chip.textContent = `${container.name}: ${container.slotCount}`;
-      breakdown.appendChild(chip);
-    });
+    document.getElementById(SLOT_SUMMARY_ID)?.remove();
+    updateSlotOverviewButton(overview, usedSlots, capacity, overBy, speedPenaltyState);
 
     visibleContainers.forEach((container) => {
       const cachedContainer = containers.find(

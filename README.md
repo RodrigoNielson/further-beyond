@@ -10,6 +10,7 @@ A Chrome extension that adds a small active indicator and slot-based inventory t
 - Sets the slot maximum to `8 + Strength score`.
 - Counts each visible item row as 1 slot, including the Equipment section.
 - Containers never spend slots themselves; only the items inside them count.
+- Replaces the weight-carried overview with a compact slot `used / max` display.
 - Extra slots above the maximum progressively push the summary toward red.
 - Each slot above the maximum applies `-5 ft.` speed, and reaching `0 ft.` shows a warning.
 - Uses the uploaded wizard icon for the page indicator.
