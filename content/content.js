@@ -10,11 +10,13 @@
 
   const INDICATOR_ID = "fb-active-indicator";
   const CONTAINER_BADGE_CLASS = "fb-container-slot-badge";
+  const ITEM_IGNORE_TOGGLE_CLASS = "fb-item-ignore-toggle";
   const SPEED_PENALTY_ID = "fb-speed-penalty";
   const SPEED_WARNING_ID = "fb-speed-warning";
   const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
   const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
   const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
+  const IGNORE_WEIGHT_STORAGE_KEY_PREFIX = "fb:ignored-weight:";
   const HEADING_SELECTORS = [
     "main .ddbc-character-tidbits__heading h1",
     "main h1.styles_characterName__2x8wQ",
@@ -27,6 +29,10 @@
     capacity: null,
     totalCoins: null,
     coinSlots: null,
+  };
+  const ignoreWeightState = {
+    characterKey: getCharacterKey(),
+    itemKeys: loadIgnoredItemKeys(getCharacterKey()),
   };
   const pageBridgeState = {
     bridgePromise: null,
@@ -145,6 +151,10 @@
   }
 
   function collectInventoryContainers() {
+    const characterKey = getCharacterKey();
+    const ignoredItemKeys = ensureIgnoredWeightState(characterKey);
+    const containerNameCounts = new Map();
+
     return Array.from(document.querySelectorAll(".ct-equipment .ct-content-group"))
       .map((group) => {
         const name = getContainerName(group);
@@ -152,19 +162,49 @@
           return null;
         }
 
+        const normalizedContainerName = normalizeInventoryKeyPart(name) || "container";
+        const containerOccurrence =
+          (containerNameCounts.get(normalizedContainerName) || 0) + 1;
+        containerNameCounts.set(normalizedContainerName, containerOccurrence);
+
+        const key = `${normalizedContainerName}::${containerOccurrence}`;
+
         const itemRows = Array.from(
           group.querySelectorAll(
             ".ct-content-group__content .ct-inventory__items > .ct-inventory-item"
           )
         );
+        const itemNameCounts = new Map();
+        const items = itemRows.map((row) => {
+          const itemName = getInventoryItemName(row);
+          const normalizedItemName = normalizeInventoryKeyPart(itemName) || "item";
+          const itemOccurrence = (itemNameCounts.get(normalizedItemName) || 0) + 1;
+          const itemKey = buildInventoryItemKey(key, itemName, itemOccurrence);
+
+          itemNameCounts.set(normalizedItemName, itemOccurrence);
+
+          return {
+            row,
+            key: itemKey,
+            ignored: ignoredItemKeys.has(itemKey),
+          };
+        });
         const countsContainer = false;
+        const ignoredCount = items.filter((item) => item.ignored).length;
+
+        items.forEach((item) => {
+          upsertIgnoreWeightToggle(item, characterKey);
+        });
 
         return {
           group,
+          key,
           name,
+          itemKeys: items.map((item) => item.key),
+          ignoredCount,
           itemCount: itemRows.length,
           countsContainer,
-          slotCount: itemRows.length,
+          slotCount: itemRows.length - ignoredCount,
         };
       })
       .filter(Boolean);
@@ -172,15 +212,209 @@
 
   function cloneContainerData(containers) {
     return containers.map((container) => ({
+      key: container.key,
       name: container.name,
+      ignoredCount: container.ignoredCount,
       itemCount: container.itemCount,
       countsContainer: container.countsContainer,
       slotCount: container.slotCount,
     }));
   }
 
+  function pruneIgnoredItemKeys(characterKey, containers) {
+    const ignoredItemKeys = ensureIgnoredWeightState(characterKey);
+    const visibleItemKeys = new Set(
+      containers.flatMap((container) => container.itemKeys || [])
+    );
+    let hasChanges = false;
+
+    Array.from(ignoredItemKeys).forEach((itemKey) => {
+      if (!visibleItemKeys.has(itemKey)) {
+        ignoredItemKeys.delete(itemKey);
+        hasChanges = true;
+      }
+    });
+
+    if (hasChanges) {
+      saveIgnoredItemKeys(characterKey, ignoredItemKeys);
+    }
+  }
+
   function getCharacterKey() {
     return window.location.pathname.split("/")[2] || "";
+  }
+
+  function normalizeInventoryKeyPart(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function getIgnoredWeightStorageKey(characterKey) {
+    return `${IGNORE_WEIGHT_STORAGE_KEY_PREFIX}${characterKey}`;
+  }
+
+  function loadIgnoredItemKeys(characterKey) {
+    if (!characterKey) {
+      return new Set();
+    }
+
+    try {
+      const rawValue = window.localStorage.getItem(
+        getIgnoredWeightStorageKey(characterKey)
+      );
+      const parsedValue = rawValue ? JSON.parse(rawValue) : [];
+
+      return new Set(Array.isArray(parsedValue) ? parsedValue : []);
+    } catch (error) {
+      return new Set();
+    }
+  }
+
+  function saveIgnoredItemKeys(characterKey, itemKeys) {
+    if (!characterKey) {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        getIgnoredWeightStorageKey(characterKey),
+        JSON.stringify(Array.from(itemKeys).sort())
+      );
+    } catch (error) {
+      console.warn("[Further Beyond] Could not save ignored weight items.", error);
+    }
+  }
+
+  function ensureIgnoredWeightState(characterKey) {
+    if (ignoreWeightState.characterKey !== characterKey) {
+      ignoreWeightState.characterKey = characterKey;
+      ignoreWeightState.itemKeys = loadIgnoredItemKeys(characterKey);
+    }
+
+    return ignoreWeightState.itemKeys;
+  }
+
+  function toggleIgnoredItemWeight(characterKey, itemKey) {
+    if (!itemKey) {
+      return;
+    }
+
+    const ignoredItemKeys = ensureIgnoredWeightState(characterKey);
+    if (ignoredItemKeys.has(itemKey)) {
+      ignoredItemKeys.delete(itemKey);
+    } else {
+      ignoredItemKeys.add(itemKey);
+    }
+
+    saveIgnoredItemKeys(characterKey, ignoredItemKeys);
+    scheduleRefresh();
+  }
+
+  function handleIgnoreWeightToggleClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const button = event.currentTarget;
+    toggleIgnoredItemWeight(
+      button.dataset.characterKey || getCharacterKey(),
+      button.dataset.itemKey || ""
+    );
+  }
+
+  function getTextWithoutIgnoreToggle(element) {
+    if (!element) {
+      return "";
+    }
+
+    const clone = element.cloneNode(true);
+    clone
+      .querySelectorAll(`.${ITEM_IGNORE_TOGGLE_CLASS}`)
+      .forEach((toggle) => toggle.remove());
+
+    return clone.textContent.replace(/\s+/g, " ").trim();
+  }
+
+  function getInventoryItemName(itemRow) {
+    const nameSelectors = [
+      ".ct-inventory-item__name",
+      ".styles_itemName__xLCwW",
+      '[class*="itemName"]',
+    ];
+
+    for (const selector of nameSelectors) {
+      const nameElement = itemRow.querySelector(selector);
+      const text = getTextWithoutIgnoreToggle(nameElement);
+      if (text) {
+        return text;
+      }
+    }
+
+    return getTextWithoutIgnoreToggle(itemRow);
+  }
+
+  function getInventoryItemToggleAnchor(itemRow) {
+    const weightCell = itemRow.querySelector(
+      ".ct-inventory-item__weight, [class*='weight']"
+    );
+
+    if (weightCell) {
+      return {
+        element: weightCell,
+        replaceContents: true,
+      };
+    }
+
+    return {
+      element:
+        itemRow.querySelector(
+          ".ct-inventory-item__name, .ct-inventory-item__definition, .styles_itemName__xLCwW"
+        ) || itemRow,
+      replaceContents: false,
+    };
+  }
+
+  function buildInventoryItemKey(containerKey, itemName, occurrence) {
+    const normalizedItemName = normalizeInventoryKeyPart(itemName) || "item";
+    return `${containerKey}::${normalizedItemName}::${occurrence}`;
+  }
+
+  function upsertIgnoreWeightToggle(item, characterKey) {
+    const anchor = getInventoryItemToggleAnchor(item.row);
+    if (!anchor?.element) {
+      return;
+    }
+
+    let toggle = item.row.querySelector(`.${ITEM_IGNORE_TOGGLE_CLASS}`);
+    if (!toggle) {
+      toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = ITEM_IGNORE_TOGGLE_CLASS;
+      toggle.addEventListener("click", handleIgnoreWeightToggleClick);
+    }
+
+    if (anchor.replaceContents) {
+      if (toggle.parentElement !== anchor.element || anchor.element.childNodes.length !== 1) {
+        anchor.element.replaceChildren(toggle);
+      }
+    } else if (toggle.parentElement !== anchor.element) {
+      anchor.element.appendChild(toggle);
+    }
+
+    item.row.dataset.fbWeightIgnored = item.ignored ? "true" : "false";
+    toggle.dataset.characterKey = characterKey;
+    toggle.dataset.itemKey = item.key;
+    toggle.dataset.ignored = item.ignored ? "true" : "false";
+    toggle.setAttribute("aria-pressed", item.ignored ? "true" : "false");
+    toggle.setAttribute(
+      "aria-label",
+      item.ignored ? "Item weight ignored" : "Item weight counted"
+    );
+    toggle.textContent = "";
+    toggle.title = item.ignored
+      ? "This item is ignored for slot weight. Click to count it again."
+      : "This item counts toward slot weight. Click to ignore it.";
   }
 
   function ensurePageBridge() {
@@ -315,14 +549,14 @@
     }
 
     const visibleByName = new Map(
-      visibleContainers.map((container) => [container.name, container])
+      visibleContainers.map((container) => [container.key, container])
     );
     const merged = cachedContainers.map(
-      (container) => visibleByName.get(container.name) || container
+      (container) => visibleByName.get(container.key) || container
     );
 
     visibleContainers.forEach((container) => {
-      if (!cachedContainers.some((cached) => cached.name === container.name)) {
+      if (!cachedContainers.some((cached) => cached.key === container.key)) {
         merged.push(container);
       }
     });
@@ -348,11 +582,11 @@
 
     note.className = "fb-slot-overview__note";
     note.hidden = true;
-  noteIcon.className = "fb-slot-overview__coin-icon";
-  noteIcon.setAttribute("aria-hidden", "true");
-  noteValue.className = "fb-slot-overview__coin-value";
-  note.appendChild(noteIcon);
-  note.appendChild(noteValue);
+    noteIcon.className = "fb-slot-overview__coin-icon";
+    noteIcon.setAttribute("aria-hidden", "true");
+    noteValue.className = "fb-slot-overview__coin-value";
+    note.appendChild(noteIcon);
+    note.appendChild(noteValue);
 
     value.className = "fb-slot-overview__value";
 
@@ -598,14 +832,14 @@
       nameCell.appendChild(badge);
     }
 
-    badge.textContent = container.countsContainer
-      ? `${container.slotCount} slots`
-      : `${container.itemCount} slots`;
+    badge.textContent = `${container.slotCount} slots`;
 
     badge.dataset.weightless = container.countsContainer ? "false" : "true";
     badge.title = container.countsContainer
-      ? `${container.name} counts as 1 slot plus ${container.itemCount} stored item slots.`
-      : `${container.name} is excluded from container-slot cost.`;
+      ? `${container.name} counts as 1 slot plus ${container.slotCount} stored item slots.`
+      : container.ignoredCount > 0
+        ? `${container.name} is excluded from container-slot cost. ${container.ignoredCount} item${container.ignoredCount === 1 ? "" : "s"} ignored for slot weight.`
+        : `${container.name} is excluded from container-slot cost.`;
   }
 
   async function mountInventorySlots() {
@@ -614,6 +848,8 @@
       resetInventorySnapshot(characterKey);
     }
 
+    const ignoredItemCount = ensureIgnoredWeightState(characterKey).size;
+
     let pageSnapshot = null;
     try {
       pageSnapshot = await getPageInventorySnapshot();
@@ -621,8 +857,12 @@
       pageSnapshot = null;
     }
 
+    const snapshotUsedSlots = Number.isFinite(pageSnapshot?.usedSlots)
+      ? Math.max(pageSnapshot.usedSlots - ignoredItemCount, 0)
+      : null;
+
     if (pageSnapshot?.characterKey === characterKey) {
-      inventorySnapshot.usedSlots = pageSnapshot.usedSlots;
+      inventorySnapshot.usedSlots = snapshotUsedSlots;
       inventorySnapshot.capacity = pageSnapshot.capacity;
       inventorySnapshot.totalCoins = Number.isFinite(pageSnapshot.totalCoins)
         ? pageSnapshot.totalCoins
@@ -634,17 +874,15 @@
 
     const inventoryRoot = document.querySelector(".ct-equipment");
     if (!inventoryRoot) {
-      if (
-        pageSnapshot?.characterKey === characterKey &&
-        Number.isFinite(pageSnapshot.usedSlots) &&
-        Number.isFinite(pageSnapshot.capacity)
-      ) {
+      // Calculate slots from the bridge on initial page load before Inventory has rendered.
+      if (Number.isFinite(snapshotUsedSlots) && Number.isFinite(pageSnapshot?.capacity)) {
         updateSpeedPenalty(
-          Math.max(pageSnapshot.usedSlots - pageSnapshot.capacity, 0)
+          Math.max(snapshotUsedSlots - pageSnapshot.capacity, 0)
         );
-      } else {
-        applyStoredSpeedPenalty(characterKey);
+        return false;
       }
+
+      applyStoredSpeedPenalty(characterKey);
       return false;
     }
 
@@ -663,13 +901,14 @@
     const isUnfiltered = isUnfilteredInventoryView(inventoryRoot);
 
     if (isUnfiltered) {
+      pruneIgnoredItemKeys(characterKey, visibleContainers);
       inventorySnapshot.containers = cloneContainerData(visibleContainers);
     }
 
     const containers = isUnfiltered
       ? visibleContainers
       : mergeContainerSnapshots(inventorySnapshot.containers, visibleContainers);
-    const domUsedSlots = containers.reduce(
+    const itemSlots = containers.reduce(
       (total, container) => total + container.slotCount,
       0
     );
@@ -679,9 +918,9 @@
     const coinSlots = Number.isFinite(pageSnapshot?.coinSlots)
       ? pageSnapshot.coinSlots
       : inventorySnapshot.coinSlots;
-    const usedSlots = Number.isFinite(pageSnapshot?.usedSlots)
-      ? pageSnapshot.usedSlots
-      : domUsedSlots;
+    const usedSlots = !isUnfiltered && !inventorySnapshot.containers.length && Number.isFinite(pageSnapshot?.usedSlots)
+      ? Math.max(pageSnapshot.usedSlots - ignoredItemCount, 0)
+      : itemSlots + (Number.isFinite(coinSlots) ? coinSlots : 0);
     const overBy = Math.max(usedSlots - capacity, 0);
     const speedPenaltyState = updateSpeedPenalty(overBy);
 
@@ -702,11 +941,13 @@
 
     visibleContainers.forEach((container) => {
       const cachedContainer = containers.find(
-        (candidate) => candidate.name === container.name
+        (candidate) => candidate.key === container.key
       );
 
       upsertContainerBadge({
         ...container,
+        key: cachedContainer?.key ?? container.key,
+        ignoredCount: cachedContainer?.ignoredCount ?? container.ignoredCount,
         itemCount: cachedContainer?.itemCount ?? container.itemCount,
         countsContainer:
           cachedContainer?.countsContainer ?? container.countsContainer,
