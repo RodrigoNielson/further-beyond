@@ -13,6 +13,7 @@
     requireFn: null,
     rulesConfigModule: null,
   };
+  const COIN_KEYS = ["cp", "sp", "ep", "gp", "pp"];
 
   function getWebpackRequire() {
     if (bridgeState.requireFn) {
@@ -88,15 +89,51 @@
     return Number.isFinite(baseValue) ? baseValue + bonusValue : null;
   }
 
+  function getCurrencyAmount(currency) {
+    if (Number.isFinite(currency)) {
+      return currency;
+    }
+
+    if (Number.isFinite(currency?.value)) {
+      return currency.value;
+    }
+
+    if (Number.isFinite(currency?.quantity)) {
+      return currency.quantity;
+    }
+
+    return 0;
+  }
+
+  function getTotalCoins(character) {
+    const currencies = character?.currencies;
+    if (!currencies) {
+      return 0;
+    }
+
+    return COIN_KEYS.reduce(
+      (total, key) => total + getCurrencyAmount(currencies[key]),
+      0
+    );
+  }
+
+  function getCoinSlots(character) {
+    return Math.floor(getTotalCoins(character) / 250);
+  }
+
   function createInventorySnapshot() {
     const character = getCurrentRulesConfig()?.store?.getState?.()?.character;
     const inventory = Array.isArray(character?.inventory) ? character.inventory : [];
-    const usedSlots = inventory.filter((item) => !item?.definition?.isContainer).length;
+    const itemSlots = inventory.filter((item) => !item?.definition?.isContainer).length;
+    const totalCoins = getTotalCoins(character);
+    const coinSlots = getCoinSlots(character);
     const strengthScore = getEffectiveStat(character, 1);
 
     return {
       characterKey: String(character?.id || ""),
-      usedSlots,
+      totalCoins,
+      coinSlots,
+      usedSlots: itemSlots + coinSlots,
       capacity: Number.isFinite(strengthScore) ? strengthScore + 8 : null,
     };
   }

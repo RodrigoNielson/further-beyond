@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Further Beyond",
-  "version": "0.0.15",
+  "version": "0.0.18",
   "description": "Adds character-page indicators and slot-based inventory tracking on D&D Beyond.",
   "action": {
     "default_icon": {

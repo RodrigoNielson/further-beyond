@@ -25,6 +25,8 @@
     containers: [],
     usedSlots: null,
     capacity: null,
+    totalCoins: null,
+    coinSlots: null,
   };
   const pageBridgeState = {
     bridgePromise: null,
@@ -294,6 +296,8 @@
     inventorySnapshot.containers = [];
     inventorySnapshot.usedSlots = null;
     inventorySnapshot.capacity = null;
+    inventorySnapshot.totalCoins = null;
+    inventorySnapshot.coinSlots = null;
   }
 
   function isUnfilteredInventoryView(inventoryRoot) {
@@ -328,28 +332,71 @@
 
   function createSlotOverview() {
     const content = document.createElement("div");
+    const heading = document.createElement("div");
     const label = document.createElement("span");
+    const note = document.createElement("span");
+    const noteIcon = document.createElement("span");
+    const noteValue = document.createElement("span");
     const value = document.createElement("span");
     const meta = document.createElement("span");
 
     content.className = "fb-slot-overview";
+    heading.className = "fb-slot-overview__heading";
 
     label.className = "fb-slot-overview__label";
     label.textContent = "Item Slots";
+
+    note.className = "fb-slot-overview__note";
+    note.hidden = true;
+  noteIcon.className = "fb-slot-overview__coin-icon";
+  noteIcon.setAttribute("aria-hidden", "true");
+  noteValue.className = "fb-slot-overview__coin-value";
+  note.appendChild(noteIcon);
+  note.appendChild(noteValue);
 
     value.className = "fb-slot-overview__value";
 
     meta.className = "fb-slot-overview__meta";
     meta.hidden = true;
 
-    content.appendChild(label);
+    heading.appendChild(label);
+    heading.appendChild(note);
+    content.appendChild(heading);
     content.appendChild(value);
     content.appendChild(meta);
 
     return content;
   }
 
-  function updateSlotOverviewButton(overview, usedSlots, capacity, overBy, speedPenaltyState) {
+  function formatCoinSlotNote(coinSlots) {
+    if (!Number.isFinite(coinSlots)) {
+      return "";
+    }
+
+    return `Coins: ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"}`;
+  }
+
+  function formatCoinSlotTooltip(coinSlots, totalCoins) {
+    if (!Number.isFinite(coinSlots)) {
+      return "";
+    }
+
+    if (Number.isFinite(totalCoins)) {
+      return `Coins are occupying ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"}. ${totalCoins.toLocaleString()} total coins / 250 = ${coinSlots}.`;
+    }
+
+    return `Coins are occupying ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"} at 250 coins per slot.`;
+  }
+
+  function updateSlotOverviewButton(
+    overview,
+    usedSlots,
+    capacity,
+    totalCoins,
+    coinSlots,
+    overBy,
+    speedPenaltyState
+  ) {
     const button = overview.querySelector(".styles_overviewPrimaryButton__j84A5, button");
     if (!button) return;
 
@@ -363,9 +410,26 @@
 
     const value = content.querySelector(".fb-slot-overview__value");
     const meta = content.querySelector(".fb-slot-overview__meta");
+    const note = content.querySelector(".fb-slot-overview__note");
+    const noteIcon = content.querySelector(".fb-slot-overview__coin-icon");
+    const noteValue = content.querySelector(".fb-slot-overview__coin-value");
     const intensity = speedPenaltyState?.intensity ?? 0;
+    const coinSlotNote = formatCoinSlotNote(coinSlots);
+    const coinSlotTooltip = formatCoinSlotTooltip(coinSlots, totalCoins);
 
     value.textContent = `${usedSlots} / ${capacity}`;
+    note.hidden = !coinSlotNote;
+    noteValue.textContent = Number.isFinite(coinSlots) ? String(coinSlots) : "";
+
+    if (coinSlotTooltip) {
+      note.title = coinSlotTooltip;
+      note.setAttribute("aria-label", coinSlotTooltip);
+      noteIcon.title = coinSlotTooltip;
+    } else {
+      note.removeAttribute("title");
+      note.removeAttribute("aria-label");
+      noteIcon.removeAttribute("title");
+    }
 
     if (overBy > 0 && speedPenaltyState) {
       meta.hidden = false;
@@ -406,10 +470,15 @@
           : usedSlots >= capacity
             ? "full"
             : "ok";
-    button.title =
+    button.title = [
+      `${usedSlots} / ${capacity} item slots used.`,
+      coinSlotNote ? `${coinSlotNote}.` : "",
       overBy > 0 && speedPenaltyState
-        ? `${usedSlots} / ${capacity} slots. Speed penalty: -${speedPenaltyState.penalty} ft.`
-        : `${usedSlots} / ${capacity} item slots used.`;
+        ? `Speed penalty: -${speedPenaltyState.penalty} ft.`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
 
   function getSpeedBoxState() {
@@ -555,6 +624,12 @@
     if (pageSnapshot?.characterKey === characterKey) {
       inventorySnapshot.usedSlots = pageSnapshot.usedSlots;
       inventorySnapshot.capacity = pageSnapshot.capacity;
+      inventorySnapshot.totalCoins = Number.isFinite(pageSnapshot.totalCoins)
+        ? pageSnapshot.totalCoins
+        : null;
+      inventorySnapshot.coinSlots = Number.isFinite(pageSnapshot.coinSlots)
+        ? pageSnapshot.coinSlots
+        : null;
     }
 
     const inventoryRoot = document.querySelector(".ct-equipment");
@@ -598,6 +673,12 @@
       (total, container) => total + container.slotCount,
       0
     );
+    const totalCoins = Number.isFinite(pageSnapshot?.totalCoins)
+      ? pageSnapshot.totalCoins
+      : inventorySnapshot.totalCoins;
+    const coinSlots = Number.isFinite(pageSnapshot?.coinSlots)
+      ? pageSnapshot.coinSlots
+      : inventorySnapshot.coinSlots;
     const usedSlots = Number.isFinite(pageSnapshot?.usedSlots)
       ? pageSnapshot.usedSlots
       : domUsedSlots;
@@ -606,8 +687,18 @@
 
     inventorySnapshot.usedSlots = usedSlots;
     inventorySnapshot.capacity = capacity;
+    inventorySnapshot.totalCoins = totalCoins;
+    inventorySnapshot.coinSlots = coinSlots;
 
-    updateSlotOverviewButton(overview, usedSlots, capacity, overBy, speedPenaltyState);
+    updateSlotOverviewButton(
+      overview,
+      usedSlots,
+      capacity,
+      totalCoins,
+      coinSlots,
+      overBy,
+      speedPenaltyState
+    );
 
     visibleContainers.forEach((container) => {
       const cachedContainer = containers.find(
