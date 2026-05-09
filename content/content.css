@@ -209,6 +209,93 @@ body.fb-config-modal-open {
   color: #8d2b1f;
 }
 
+.fb-short-rest-action {
+  display: grid;
+  gap: 6px;
+}
+
+[data-fb-short-rest-native-hidden="true"] {
+  display: none !important;
+}
+
+.fb-short-rest-hitdie-manager {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fb-short-rest-hitdie-group__summary {
+  color: rgba(18, 24, 28, 0.72);
+  font-family: "Roboto Condensed", Roboto, Helvetica, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fb-short-rest-hitdie-group__slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fb-short-rest-hitdie-slot {
+  display: inline-flex;
+  position: relative;
+}
+
+.fb-short-rest-hitdie-slot-input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  margin: 0;
+}
+
+.fb-short-rest-hitdie-slot__marker {
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgba(197, 49, 49, 0.42);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.9);
+}
+
+.fb-short-rest-hitdie-slot-input:checked + .fb-short-rest-hitdie-slot__marker {
+  background: radial-gradient(circle at 50% 50%, #c53131 0 44%, #ffffff 48% 100%);
+}
+
+.fb-short-rest-hitdie-slot-input:disabled + .fb-short-rest-hitdie-slot__marker {
+  border-color: rgba(18, 24, 28, 0.24);
+  background: radial-gradient(circle at 50% 50%, rgba(18, 24, 28, 0.62) 0 44%, #ffffff 48% 100%);
+}
+
+.fb-short-rest-hitdie-slot-input:focus-visible + .fb-short-rest-hitdie-slot__marker {
+  outline: 2px solid rgba(197, 49, 49, 0.24);
+  outline-offset: 2px;
+}
+
+.fb-short-rest-use-hit-die {
+  width: 100%;
+}
+
+.fb-short-rest-use-hit-die:disabled {
+  opacity: 0.58;
+}
+
+.fb-short-rest-status {
+  color: rgba(18, 24, 28, 0.72);
+  font-family: "Roboto Condensed", Roboto, Helvetica, sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.3;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.fb-short-rest-status[data-state="error"] {
+  color: #8d2b1f;
+}
+
 .fb-slot-summary {
   --fb-summary-border-color: rgba(197, 49, 49, 0.22);
   --fb-summary-bg-top: rgba(255, 251, 244, 0.96);

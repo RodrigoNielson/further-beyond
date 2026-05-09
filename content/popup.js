@@ -6,6 +6,7 @@
     itemSlotsEnabled: true,
     coinsHaveWeight: true,
     coinsPerSlot: 250,
+    shortRestHitDiceEnabled: true,
   });
 
   let statusTimeoutId = null;
@@ -25,6 +26,7 @@
         value?.coinsPerSlot,
         DEFAULT_SETTINGS.coinsPerSlot
       ),
+      shortRestHitDiceEnabled: value?.shortRestHitDiceEnabled !== false,
     };
   }
 
@@ -128,6 +130,9 @@
     const itemSlotsEnabled = document.getElementById("item-slots-enabled");
     const coinsHaveWeight = document.getElementById("coins-have-weight");
     const coinsPerSlot = document.getElementById("coins-per-slot");
+    const shortRestHitDiceEnabled = document.getElementById(
+      "short-rest-hit-dice-enabled"
+    );
 
     if (itemSlotsEnabled) {
       itemSlotsEnabled.checked = !!settings.itemSlotsEnabled;
@@ -139,6 +144,10 @@
 
     if (coinsPerSlot) {
       coinsPerSlot.value = String(settings.coinsPerSlot);
+    }
+
+    if (shortRestHitDiceEnabled) {
+      shortRestHitDiceEnabled.checked = !!settings.shortRestHitDiceEnabled;
     }
 
     updateDisabledState(settings);
@@ -155,6 +164,9 @@
       coinsPerSlot:
         document.getElementById("coins-per-slot")?.value ??
         DEFAULT_SETTINGS.coinsPerSlot,
+      shortRestHitDiceEnabled:
+        document.getElementById("short-rest-hit-dice-enabled")?.checked ??
+        DEFAULT_SETTINGS.shortRestHitDiceEnabled,
     });
   }
 

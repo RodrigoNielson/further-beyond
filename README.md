@@ -7,6 +7,7 @@ A Chrome extension that adds a small active indicator, an in-page Further Beyond
 - Shows a small Further Beyond icon immediately to the left of the character name.
 - Clicking the Further Beyond toolbar icon opens a settings popup for enabled features.
 - Adds a `FURTHER BEYOND` action next to `MANAGE` on character pages and opens an in-page settings window.
+- Adds a `Use Hit Die` action to the Short Rest sidebar so selected hit dice can be saved without taking a full short rest.
 - Only runs on D&D Beyond character pages under `https://www.dndbeyond.com/characters/*`.
 - Tracks inventory slots on the Inventory page.
 - Sets the slot maximum to `8 + Strength score`.
@@ -38,7 +39,7 @@ To create a distributable zip for Chrome, run the PowerShell build script from t
 .\build.ps1
 ```
 
-This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.25.zip`.
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.29.zip`.
 
 ```
 further-beyond/

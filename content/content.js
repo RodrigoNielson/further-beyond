@@ -18,12 +18,23 @@
   const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
   const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
   const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
+  const SHORT_REST_REQUEST_EVENT = "fb:short-rest-request";
+  const SHORT_REST_RESPONSE_EVENT = "fb:short-rest-response";
   const IGNORE_WEIGHT_STORAGE_KEY_PREFIX = "fb:ignored-weight:";
   const EXTENSION_SETTINGS_STORAGE_KEY = "fb:settings";
+  const SHORT_REST_ACTION_CLASS = "fb-short-rest-action";
+  const SHORT_REST_USE_BUTTON_CLASS = "fb-short-rest-use-hit-die";
+  const SHORT_REST_STATUS_CLASS = "fb-short-rest-status";
+  const SHORT_REST_CUSTOM_GROUP_CLASS = "fb-short-rest-hitdie-group";
+  const SHORT_REST_CUSTOM_MANAGER_CLASS = "fb-short-rest-hitdie-manager";
+  const SHORT_REST_CUSTOM_SLOT_CLASS = "fb-short-rest-hitdie-slot";
+  const SHORT_REST_CUSTOM_SLOT_INPUT_CLASS = "fb-short-rest-hitdie-slot-input";
+  const SHORT_REST_NATIVE_MANAGER_HIDDEN_ATTR = "data-fb-short-rest-native-hidden";
   const DEFAULT_EXTENSION_SETTINGS = Object.freeze({
     itemSlotsEnabled: true,
     coinsHaveWeight: true,
     coinsPerSlot: 250,
+    shortRestHitDiceEnabled: true,
   });
   const HEADING_SELECTORS = [
     "main .ddbc-character-tidbits__heading h1",
@@ -47,6 +58,9 @@
     listenerBound: false,
     pendingRequests: new Map(),
     activeInventoryPromise: null,
+    shortRestListenerBound: false,
+    pendingShortRestRequests: new Map(),
+    activeShortRestPromise: null,
   };
   const extensionSettingsState = {
     value: { ...DEFAULT_EXTENSION_SETTINGS },
@@ -54,9 +68,15 @@
     loaded: false,
     listenerBound: false,
   };
+  const shortRestUiState = {
+    characterKey: "",
+    pendingUsage: {},
+    dirty: false,
+  };
 
   let refreshPending = false;
   let settingsStatusTimeoutId = null;
+  let shortRestStatusTimeoutId = null;
 
   function findCharacterHeading() {
     for (const selector of HEADING_SELECTORS) {
@@ -250,6 +270,9 @@
     const itemSlotsEnabled = modal.querySelector("#fb-settings-item-slots-enabled");
     const coinsHaveWeight = modal.querySelector("#fb-settings-coins-have-weight");
     const coinsPerSlot = modal.querySelector("#fb-settings-coins-per-slot");
+    const shortRestHitDiceEnabled = modal.querySelector(
+      "#fb-settings-short-rest-hit-dice-enabled"
+    );
 
     if (itemSlotsEnabled) {
       itemSlotsEnabled.checked = !!settings.itemSlotsEnabled;
@@ -261,6 +284,10 @@
 
     if (coinsPerSlot) {
       coinsPerSlot.value = String(settings.coinsPerSlot);
+    }
+
+    if (shortRestHitDiceEnabled) {
+      shortRestHitDiceEnabled.checked = !!settings.shortRestHitDiceEnabled;
     }
 
     updateConfigFormDisabledState(settings);
@@ -278,6 +305,9 @@
       coinsPerSlot:
         modal?.querySelector("#fb-settings-coins-per-slot")?.value ??
         DEFAULT_EXTENSION_SETTINGS.coinsPerSlot,
+      shortRestHitDiceEnabled:
+        modal?.querySelector("#fb-settings-short-rest-hit-dice-enabled")
+          ?.checked ?? DEFAULT_EXTENSION_SETTINGS.shortRestHitDiceEnabled,
     });
   }
 
@@ -371,6 +401,15 @@
             </label>
             <p class="fb-config-modal__hint">Set how many total coins equal one slot when coin weight is enabled.</p>
           </section>
+          <section class="fb-config-modal__card">
+            <label class="fb-config-modal__toggle" for="fb-settings-short-rest-hit-dice-enabled">
+              <span class="fb-config-modal__copy">
+                <span class="fb-config-modal__label">Custom short rest hit dice</span>
+                <span class="fb-config-modal__description">Replaces D&amp;D Beyond's hit-die checkboxes with the Further Beyond persistent version and adds the Use Hit Die action.</span>
+              </span>
+              <input id="fb-settings-short-rest-hit-dice-enabled" type="checkbox" />
+            </label>
+          </section>
         </form>
         <p class="fb-config-modal__status" role="status" aria-live="polite"></p>
       </div>
@@ -419,7 +458,393 @@
       }
     });
   }
+  function findShortRestUi() {
+    const buttons = Array.from(document.querySelectorAll("button")).filter(
+      (button) => isElementVisible(button)
+    );
+    const takeShortRestButton = buttons.find((button) =>
+      normalizeText(button.textContent).toUpperCase().includes("TAKE SHORT REST")
+    );
 
+    if (!takeShortRestButton) {
+      return null;
+    }
+
+    const takeShortRestAction = takeShortRestButton.closest(".ct-reset-pane__action");
+    const actionsContainer = takeShortRestAction?.parentElement || null;
+    const resetButton = actionsContainer
+      ? Array.from(actionsContainer.querySelectorAll("button")).find(
+          (button) =>
+            button !== takeShortRestButton &&
+            normalizeText(button.textContent).toUpperCase() === "RESET"
+        ) || null
+      : null;
+    const hitDiePanels = Array.from(
+      document.querySelectorAll(".ct-reset-pane__hitdie")
+    );
+
+    return {
+      takeShortRestButton,
+      takeShortRestAction,
+      actionsContainer,
+      resetButton,
+      hitDiePanels,
+    };
+  }
+
+  function buildShortRestUsageMap(classes, key) {
+    return (Array.isArray(classes) ? classes : []).reduce((usage, characterClass) => {
+      const classId = String(characterClass?.id || "").trim();
+      if (!classId) {
+        return usage;
+      }
+
+      usage[classId] = parsePositiveInteger(characterClass?.[key] ?? 0, 0);
+      return usage;
+    }, {});
+  }
+
+  function syncShortRestUiState(snapshot, force) {
+    const classes = Array.isArray(snapshot?.classes) ? snapshot.classes : [];
+    const characterKey = snapshot?.characterKey || "";
+    const effectiveUsage = buildShortRestUsageMap(classes, "effectiveUsedHitDice");
+
+    if (
+      force ||
+      shortRestUiState.characterKey !== characterKey ||
+      !shortRestUiState.dirty
+    ) {
+      shortRestUiState.characterKey = characterKey;
+      shortRestUiState.pendingUsage = effectiveUsage;
+      shortRestUiState.dirty = false;
+      return shortRestUiState.pendingUsage;
+    }
+
+    shortRestUiState.characterKey = characterKey;
+    shortRestUiState.pendingUsage = classes.reduce((usage, characterClass) => {
+      const classId = String(characterClass?.id || "").trim();
+      const minimum = parsePositiveInteger(characterClass?.currentUsedHitDice ?? 0, 0);
+      const maximum = parsePositiveInteger(characterClass?.totalHitDice ?? minimum, minimum);
+
+      usage[classId] = clamp(
+        parsePositiveInteger(shortRestUiState.pendingUsage[classId] ?? minimum, minimum),
+        minimum,
+        maximum
+      );
+      return usage;
+    }, {});
+
+    return shortRestUiState.pendingUsage;
+  }
+
+  function getPendingShortRestUsage() {
+    return { ...shortRestUiState.pendingUsage };
+  }
+
+  function hasShortRestUsageDifference(leftUsage, rightUsage) {
+    const keys = new Set([
+      ...Object.keys(leftUsage || {}),
+      ...Object.keys(rightUsage || {}),
+    ]);
+
+    for (const key of keys) {
+      if (
+        parsePositiveInteger(leftUsage?.[key] ?? 0, 0) !==
+        parsePositiveInteger(rightUsage?.[key] ?? 0, 0)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function hasPendingShortRestChanges(snapshot) {
+    const effectiveUsage = buildShortRestUsageMap(
+      snapshot?.classes,
+      "effectiveUsedHitDice"
+    );
+
+    return hasShortRestUsageDifference(
+      effectiveUsage,
+      shortRestUiState.pendingUsage
+    );
+  }
+
+  function getShortRestStatusElement() {
+    return document.querySelector(`.${SHORT_REST_STATUS_CLASS}`);
+  }
+
+  function setShortRestStatus(message, state) {
+    const status = getShortRestStatusElement();
+    if (!status) {
+      return;
+    }
+
+    window.clearTimeout(shortRestStatusTimeoutId);
+    shortRestStatusTimeoutId = null;
+    status.textContent = message || "";
+    status.hidden = !message;
+
+    if (state) {
+      status.dataset.state = state;
+    } else {
+      delete status.dataset.state;
+    }
+
+    if (message && state !== "error") {
+      shortRestStatusTimeoutId = window.setTimeout(() => {
+        setShortRestStatus("", "");
+      }, 1600);
+    }
+  }
+
+  function handleTakeShortRestCapture() {
+    if (!getExtensionSettings().shortRestHitDiceEnabled) {
+      return;
+    }
+
+    syncShortRestBridgeState(getPendingShortRestUsage());
+    shortRestUiState.dirty = false;
+  }
+
+  function cleanupShortRestEnhancements() {
+    document
+      .querySelectorAll(`.${SHORT_REST_CUSTOM_MANAGER_CLASS}`)
+      .forEach((element) => {
+        element.remove();
+      });
+
+    document
+      .querySelectorAll(`[${SHORT_REST_NATIVE_MANAGER_HIDDEN_ATTR}]`)
+      .forEach((element) => {
+        element.removeAttribute(SHORT_REST_NATIVE_MANAGER_HIDDEN_ATTR);
+      });
+
+    document.querySelectorAll(`.${SHORT_REST_ACTION_CLASS}`).forEach((element) => {
+      element.remove();
+    });
+
+    shortRestUiState.pendingUsage = {};
+    shortRestUiState.dirty = false;
+  }
+
+  function bindTakeShortRestButton(button) {
+    if (!button || button.dataset.fbTakeShortRestBound === "true") {
+      return;
+    }
+
+    button.addEventListener("click", handleTakeShortRestCapture, true);
+    button.dataset.fbTakeShortRestBound = "true";
+  }
+
+  function handleShortRestHitDieToggle(event) {
+    const checkbox = event.currentTarget;
+    const classId = checkbox.dataset.classId || "";
+    const slotIndex = parsePositiveInteger(checkbox.dataset.slotIndex ?? 0, 0);
+    const currentUsed = parsePositiveInteger(checkbox.dataset.currentUsed ?? 0, 0);
+    const totalHitDice = parsePositiveInteger(checkbox.dataset.totalHitDice ?? 0, 0);
+    const nextUsedCount = checkbox.checked ? slotIndex + 1 : slotIndex;
+
+    shortRestUiState.pendingUsage = {
+      ...shortRestUiState.pendingUsage,
+      [classId]: clamp(nextUsedCount, currentUsed, totalHitDice),
+    };
+    shortRestUiState.dirty = true;
+    scheduleRefresh();
+  }
+
+  function createShortRestCustomManager(characterClass) {
+    const manager = document.createElement("div");
+    const summary = document.createElement("div");
+    const slots = document.createElement("div");
+    const classId = String(characterClass?.id || "").trim();
+    const totalHitDice = parsePositiveInteger(characterClass?.totalHitDice ?? 0, 0);
+    const currentUsed = parsePositiveInteger(
+      characterClass?.currentUsedHitDice ?? 0,
+      0
+    );
+    const pendingUsed = clamp(
+      parsePositiveInteger(
+        shortRestUiState.pendingUsage[classId] ??
+          characterClass?.effectiveUsedHitDice ??
+          currentUsed,
+        currentUsed
+      ),
+      currentUsed,
+      totalHitDice
+    );
+    const renderSignature = [classId, totalHitDice, currentUsed, pendingUsed].join(":");
+
+    manager.className = SHORT_REST_CUSTOM_MANAGER_CLASS;
+    manager.dataset.fbRenderSignature = renderSignature;
+    summary.className = `${SHORT_REST_CUSTOM_GROUP_CLASS}__summary`;
+    summary.textContent = `${pendingUsed} / ${totalHitDice} used`;
+
+    slots.className = `${SHORT_REST_CUSTOM_GROUP_CLASS}__slots`;
+
+    for (let slotIndex = 0; slotIndex < totalHitDice; slotIndex += 1) {
+      const slot = document.createElement("label");
+      const input = document.createElement("input");
+      const marker = document.createElement("span");
+
+      slot.className = SHORT_REST_CUSTOM_SLOT_CLASS;
+      input.className = SHORT_REST_CUSTOM_SLOT_INPUT_CLASS;
+      input.type = "checkbox";
+      input.checked = slotIndex < pendingUsed;
+      input.disabled = slotIndex < currentUsed;
+      input.dataset.classId = classId;
+      input.dataset.slotIndex = String(slotIndex);
+      input.dataset.currentUsed = String(currentUsed);
+      input.dataset.totalHitDice = String(totalHitDice);
+      input.addEventListener("change", handleShortRestHitDieToggle);
+
+      marker.className = `${SHORT_REST_CUSTOM_SLOT_CLASS}__marker`;
+
+      slot.appendChild(input);
+      slot.appendChild(marker);
+      slots.appendChild(slot);
+    }
+
+    manager.appendChild(summary);
+    manager.appendChild(slots);
+    return manager;
+  }
+
+  function upsertShortRestCustomManagers(shortRestUi, snapshot) {
+    const classes = Array.isArray(snapshot?.classes) ? snapshot.classes : [];
+
+    shortRestUi.hitDiePanels.forEach((panel, index) => {
+      const nativeManager = panel.querySelector(".ct-reset-pane__hitdie-manager");
+      const characterClass = classes[index];
+
+      if (!nativeManager || !characterClass) {
+        return;
+      }
+
+      nativeManager.setAttribute(SHORT_REST_NATIVE_MANAGER_HIDDEN_ATTR, "true");
+
+      const customManager = panel.querySelector(
+        `.${SHORT_REST_CUSTOM_MANAGER_CLASS}`
+      );
+      const nextManager = createShortRestCustomManager(characterClass);
+      const nextSignature = nextManager.dataset.fbRenderSignature || "";
+
+      if (customManager?.dataset.fbRenderSignature === nextSignature) {
+        return;
+      }
+
+      if (customManager) {
+        customManager.replaceWith(nextManager);
+      } else {
+        nativeManager.insertAdjacentElement("afterend", nextManager);
+      }
+    });
+  }
+
+  async function handleUseHitDieClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const button = event.currentTarget;
+    button.disabled = true;
+    setShortRestStatus("Saving hit dice...", "pending");
+
+    try {
+      const snapshot = await saveShortRestBridgeState(getPendingShortRestUsage());
+      syncShortRestUiState(snapshot, true);
+      setShortRestStatus("Hit dice saved.", "ok");
+      scheduleRefresh();
+    } catch (error) {
+      console.error("[Further Beyond] Could not save hit dice.", error);
+      setShortRestStatus("Could not save hit dice.", "error");
+      button.disabled = false;
+    }
+  }
+
+  function createUseHitDieAction(templateButton) {
+    const action = document.createElement("div");
+    const button = document.createElement("button");
+    const status = document.createElement("div");
+    const normalizedClassName = (templateButton?.className || "")
+      .replace(/\bct-button--confirm\b/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    action.className = `ct-reset-pane__action ${SHORT_REST_ACTION_CLASS}`;
+
+    button.type = "button";
+    button.className = normalizedClassName;
+    button.classList.add(SHORT_REST_USE_BUTTON_CLASS);
+    button.textContent = "Use Hit Die";
+    button.title = "Save the selected hit dice without taking a short rest.";
+    button.addEventListener("click", handleUseHitDieClick);
+
+    status.className = SHORT_REST_STATUS_CLASS;
+    status.hidden = true;
+
+    action.appendChild(button);
+    action.appendChild(status);
+    return action;
+  }
+
+  function updateUseHitDieAction(snapshot) {
+    const button = document.querySelector(`.${SHORT_REST_USE_BUTTON_CLASS}`);
+    if (!button) {
+      return;
+    }
+
+    const canUseHitDice = hasPendingShortRestChanges(snapshot);
+    button.disabled = !canUseHitDice;
+    button.dataset.state = canUseHitDice ? "ready" : "idle";
+    button.title = canUseHitDice
+      ? "Save the selected hit dice without taking a short rest."
+      : "Change the Further Beyond hit-die checkboxes to save a new used total.";
+  }
+
+  async function mountShortRestUseHitDieAction() {
+    if (!getExtensionSettings().shortRestHitDiceEnabled) {
+      cleanupShortRestEnhancements();
+      return false;
+    }
+
+    const shortRestUi = findShortRestUi();
+    if (!shortRestUi?.actionsContainer || !shortRestUi.takeShortRestAction) {
+      cleanupShortRestEnhancements();
+      return false;
+    }
+
+    let snapshot = null;
+    try {
+      snapshot = await getShortRestBridgeSnapshot();
+    } catch (error) {
+      snapshot = null;
+    }
+
+    if (!snapshot) {
+      return false;
+    }
+
+    syncShortRestUiState(snapshot, false);
+    upsertShortRestCustomManagers(shortRestUi, snapshot);
+    bindTakeShortRestButton(shortRestUi.takeShortRestButton);
+
+    let action = shortRestUi.actionsContainer.querySelector(
+      `.${SHORT_REST_ACTION_CLASS}`
+    );
+    if (!action) {
+      action = createUseHitDieAction(
+        shortRestUi.resetButton || shortRestUi.takeShortRestButton
+      );
+    }
+
+    if (action.previousElementSibling !== shortRestUi.takeShortRestAction) {
+      shortRestUi.takeShortRestAction.insertAdjacentElement("afterend", action);
+    }
+
+    updateUseHitDieAction(snapshot);
+    return true;
+  }
   function parseInteger(text) {
     if (!text) return null;
 
@@ -478,6 +903,7 @@
         value?.coinsPerSlot,
         DEFAULT_EXTENSION_SETTINGS.coinsPerSlot
       ),
+      shortRestHitDiceEnabled: value?.shortRestHitDiceEnabled !== false,
     };
   }
 
@@ -1021,6 +1447,98 @@
     return pageBridgeState.activeInventoryPromise;
   }
 
+  function handleShortRestBridgeResponse(event) {
+    const detail = event.detail || {};
+    const pending = pageBridgeState.pendingShortRestRequests.get(detail.requestId);
+    if (!pending) {
+      return;
+    }
+
+    window.clearTimeout(pending.timeoutId);
+    pageBridgeState.pendingShortRestRequests.delete(detail.requestId);
+
+    if (detail.ok) {
+      pending.resolve(detail.snapshot || null);
+      return;
+    }
+
+    pending.reject(new Error(detail.error || "The short rest bridge failed."));
+  }
+
+  function ensureShortRestBridgeListener() {
+    if (pageBridgeState.shortRestListenerBound) {
+      return;
+    }
+
+    window.addEventListener(
+      SHORT_REST_RESPONSE_EVENT,
+      handleShortRestBridgeResponse
+    );
+    pageBridgeState.shortRestListenerBound = true;
+  }
+
+  async function requestShortRestBridge(action, hitDiceUsed) {
+    ensureShortRestBridgeListener();
+    await ensurePageBridge();
+
+    return new Promise((resolve, reject) => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timeoutId = window.setTimeout(() => {
+        pageBridgeState.pendingShortRestRequests.delete(requestId);
+        reject(new Error("The short rest bridge timed out."));
+      }, 3000);
+
+      pageBridgeState.pendingShortRestRequests.set(requestId, {
+        resolve,
+        reject,
+        timeoutId,
+      });
+
+      window.dispatchEvent(
+        new CustomEvent(SHORT_REST_REQUEST_EVENT, {
+          detail: {
+            requestId,
+            action,
+            hitDiceUsed,
+          },
+        })
+      );
+    });
+  }
+
+  async function getShortRestBridgeSnapshot() {
+    if (pageBridgeState.activeShortRestPromise) {
+      return pageBridgeState.activeShortRestPromise;
+    }
+
+    pageBridgeState.activeShortRestPromise = requestShortRestBridge(
+      "get-state"
+    ).finally(() => {
+      pageBridgeState.activeShortRestPromise = null;
+    });
+
+    return pageBridgeState.activeShortRestPromise;
+  }
+
+  async function saveShortRestBridgeState(hitDiceUsed) {
+    pageBridgeState.activeShortRestPromise = null;
+    return requestShortRestBridge("save-hit-dice", hitDiceUsed);
+  }
+
+  function syncShortRestBridgeState(hitDiceUsed) {
+    const requestId = `sync-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    window.dispatchEvent(
+      new CustomEvent(SHORT_REST_REQUEST_EVENT, {
+        detail: {
+          requestId,
+          action: "sync-hit-dice",
+          hitDiceUsed,
+        },
+      })
+    );
+  }
+
   function resetInventorySnapshot(characterKey) {
     inventorySnapshot.characterKey = characterKey;
     inventorySnapshot.containers = [];
@@ -1541,6 +2059,7 @@
     mountIndicator();
     await ensureExtensionSettingsLoaded();
     mountConfigTrigger();
+    await mountShortRestUseHitDieAction();
     await mountInventorySlots();
   }
 
@@ -1572,6 +2091,12 @@
           handleInventorySnapshotResponse
         );
       }
+      if (pageBridgeState.shortRestListenerBound) {
+        window.removeEventListener(
+          SHORT_REST_RESPONSE_EVENT,
+          handleShortRestBridgeResponse
+        );
+      }
       if (
         extensionSettingsState.listenerBound &&
         chrome?.storage?.onChanged?.removeListener
@@ -1579,6 +2104,7 @@
         chrome.storage.onChanged.removeListener(handleExtensionSettingsChange);
       }
       window.clearTimeout(settingsStatusTimeoutId);
+      window.clearTimeout(shortRestStatusTimeoutId);
     },
     { once: true }
   );
