@@ -571,6 +571,42 @@
     );
   }
 
+  function countNativeCheckedShortRestSlots(slotManager) {
+    if (!slotManager) {
+      return 0;
+    }
+
+    const checkedInputCount = slotManager.querySelectorAll(
+      'input[type="checkbox"]:checked'
+    ).length;
+
+    if (checkedInputCount > 0) {
+      return checkedInputCount;
+    }
+
+    return slotManager.querySelectorAll(
+      '[role="checkbox"][aria-checked="true"]'
+    ).length;
+  }
+
+  function getNativeShortRestUsage(shortRestUi, snapshot) {
+    const classes = Array.isArray(snapshot?.classes) ? snapshot.classes : [];
+
+    return shortRestUi.hitDiePanels.reduce((usage, panel, index) => {
+      const classId = String(classes[index]?.id || "").trim();
+      const nativeSlots = panel.querySelector(
+        ".ct-reset-pane__hitdie-manager .ct-slot-manager"
+      );
+
+      if (!classId) {
+        return usage;
+      }
+
+      usage[classId] = countNativeCheckedShortRestSlots(nativeSlots);
+      return usage;
+    }, {});
+  }
+
   function getShortRestStatusElement() {
     return document.querySelector(`.${SHORT_REST_STATUS_CLASS}`);
   }
@@ -651,6 +687,7 @@
       [classId]: clamp(nextUsedCount, currentUsed, totalHitDice),
     };
     shortRestUiState.dirty = true;
+    syncShortRestBridgeState(getPendingShortRestUsage());
     scheduleRefresh();
   }
 
@@ -716,13 +753,14 @@
 
     shortRestUi.hitDiePanels.forEach((panel, index) => {
       const nativeManager = panel.querySelector(".ct-reset-pane__hitdie-manager");
+      const nativeSlots = nativeManager?.querySelector(".ct-slot-manager");
       const characterClass = classes[index];
 
-      if (!nativeManager || !characterClass) {
+      if (!nativeManager || !nativeSlots || !characterClass) {
         return;
       }
 
-      nativeManager.setAttribute(SHORT_REST_NATIVE_MANAGER_HIDDEN_ATTR, "true");
+      nativeSlots.setAttribute(SHORT_REST_NATIVE_MANAGER_HIDDEN_ATTR, "true");
 
       const customManager = panel.querySelector(
         `.${SHORT_REST_CUSTOM_MANAGER_CLASS}`
@@ -731,13 +769,17 @@
       const nextSignature = nextManager.dataset.fbRenderSignature || "";
 
       if (customManager?.dataset.fbRenderSignature === nextSignature) {
+        if (customManager.previousElementSibling !== nativeSlots) {
+          nativeSlots.insertAdjacentElement("afterend", customManager);
+        }
+
         return;
       }
 
       if (customManager) {
         customManager.replaceWith(nextManager);
       } else {
-        nativeManager.insertAdjacentElement("afterend", nextManager);
+        nativeSlots.insertAdjacentElement("afterend", nextManager);
       }
     });
   }
@@ -826,6 +868,15 @@
     }
 
     syncShortRestUiState(snapshot, false);
+    if (
+      hasShortRestUsageDifference(
+        getNativeShortRestUsage(shortRestUi, snapshot),
+        shortRestUiState.pendingUsage
+      )
+    ) {
+      syncShortRestBridgeState(getPendingShortRestUsage());
+    }
+
     upsertShortRestCustomManagers(shortRestUi, snapshot);
     bindTakeShortRestButton(shortRestUi.takeShortRestButton);
 

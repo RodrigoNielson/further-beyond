@@ -291,13 +291,21 @@
       return;
     }
 
+    const currentUsage = getCharacterHitDiceUsage(character);
     const mergedUsage = mergeHitDiceUsage(character, hitDiceUsage);
-    const zeroUsage = createZeroHitDiceUsage(character);
+    const currentHitDiceCount = createZeroHitDiceUsage(character);
+
+    Object.keys(currentHitDiceCount).forEach((classId) => {
+      currentHitDiceCount[classId] = Math.max(
+        0,
+        (mergedUsage[classId] || 0) - (currentUsage[classId] || 0)
+      );
+    });
 
     shortRestInstance.setState({
       hitDiceUsed: mergedUsage,
-      originalHitDiceUsed: mergedUsage,
-      currentHitDiceCount: zeroUsage,
+      originalHitDiceUsed: currentUsage,
+      currentHitDiceCount,
       hitDiceSlotsEnabled: true,
     });
   }
@@ -420,13 +428,21 @@
       return;
     }
 
+    const currentUsage = getCharacterHitDiceUsage(character);
     const mergedUsage = mergeHitDiceUsage(character, hitDiceUsage);
-    const zeroUsage = createZeroHitDiceUsage(character);
+    const currentHitDiceCount = createZeroHitDiceUsage(character);
+
+    Object.keys(currentHitDiceCount).forEach((classId) => {
+      currentHitDiceCount[classId] = Math.max(
+        0,
+        (mergedUsage[classId] || 0) - (currentUsage[classId] || 0)
+      );
+    });
 
     shortRestInstance.setState({
       hitDiceUsed: mergedUsage,
-      originalHitDiceUsed: mergedUsage,
-      currentHitDiceCount: zeroUsage,
+      originalHitDiceUsed: currentUsage,
+      currentHitDiceCount,
       hitDiceSlotsEnabled: true,
     });
   }
