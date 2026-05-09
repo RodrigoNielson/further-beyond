@@ -286,28 +286,39 @@
     return null;
   }
 
-  function syncShortRestInstance(shortRestInstance, character, hitDiceUsage) {
+  function syncShortRestInstance(
+    shortRestInstance,
+    character,
+    hitDiceUsage,
+    onComplete
+  ) {
     if (!shortRestInstance || typeof shortRestInstance.setState !== "function") {
       return;
     }
 
-    const currentUsage = getCharacterHitDiceUsage(character);
+    const baselineUsage = mergeHitDiceUsage(
+      character,
+      getEffectiveHitDiceUsage(character).effectiveUsage
+    );
     const mergedUsage = mergeHitDiceUsage(character, hitDiceUsage);
     const currentHitDiceCount = createZeroHitDiceUsage(character);
 
     Object.keys(currentHitDiceCount).forEach((classId) => {
       currentHitDiceCount[classId] = Math.max(
         0,
-        (mergedUsage[classId] || 0) - (currentUsage[classId] || 0)
+        (mergedUsage[classId] || 0) - (baselineUsage[classId] || 0)
       );
     });
 
-    shortRestInstance.setState({
-      hitDiceUsed: mergedUsage,
-      originalHitDiceUsed: currentUsage,
-      currentHitDiceCount,
-      hitDiceSlotsEnabled: true,
-    });
+    shortRestInstance.setState(
+      {
+        hitDiceUsed: mergedUsage,
+        originalHitDiceUsed: baselineUsage,
+        currentHitDiceCount,
+        hitDiceSlotsEnabled: true,
+      },
+      typeof onComplete === "function" ? onComplete : undefined
+    );
   }
 
   function getHitDiceStorageKey(characterKey) {
@@ -423,28 +434,39 @@
     };
   }
 
-  function syncShortRestInstance(shortRestInstance, character, hitDiceUsage) {
+  function syncShortRestInstance(
+    shortRestInstance,
+    character,
+    hitDiceUsage,
+    onComplete
+  ) {
     if (!shortRestInstance || typeof shortRestInstance.setState !== "function") {
       return;
     }
 
-    const currentUsage = getCharacterHitDiceUsage(character);
+    const baselineUsage = mergeHitDiceUsage(
+      character,
+      getEffectiveHitDiceUsage(character).effectiveUsage
+    );
     const mergedUsage = mergeHitDiceUsage(character, hitDiceUsage);
     const currentHitDiceCount = createZeroHitDiceUsage(character);
 
     Object.keys(currentHitDiceCount).forEach((classId) => {
       currentHitDiceCount[classId] = Math.max(
         0,
-        (mergedUsage[classId] || 0) - (currentUsage[classId] || 0)
+        (mergedUsage[classId] || 0) - (baselineUsage[classId] || 0)
       );
     });
 
-    shortRestInstance.setState({
-      hitDiceUsed: mergedUsage,
-      originalHitDiceUsed: currentUsage,
-      currentHitDiceCount,
-      hitDiceSlotsEnabled: true,
-    });
+    shortRestInstance.setState(
+      {
+        hitDiceUsed: mergedUsage,
+        originalHitDiceUsed: baselineUsage,
+        currentHitDiceCount,
+        hitDiceSlotsEnabled: true,
+      },
+      typeof onComplete === "function" ? onComplete : undefined
+    );
   }
 
   function syncShortRestHitDiceUsage(hitDiceUsageInput) {
@@ -458,6 +480,33 @@
     }
 
     return createShortRestSnapshot();
+  }
+
+  function takeShortRestHitDiceUsage(hitDiceUsageInput) {
+    const character = getCurrentCharacter();
+    const shortRestInstance = findShortRestInstance();
+    const fallbackUsage = getEffectiveHitDiceUsage(character).effectiveUsage;
+    const nextUsage = mergeHitDiceUsage(character, hitDiceUsageInput || fallbackUsage);
+
+    return new Promise((resolve, reject) => {
+      if (
+        !shortRestInstance ||
+        !character ||
+        typeof shortRestInstance.handleSave !== "function"
+      ) {
+        reject(new Error("The Short Rest panel is not available."));
+        return;
+      }
+
+      syncShortRestInstance(shortRestInstance, character, nextUsage, () => {
+        try {
+          shortRestInstance.handleSave();
+          resolve(createShortRestSnapshot());
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
   }
 
   function createShortRestSnapshot() {
@@ -585,17 +634,28 @@
     }
 
     try {
-      const snapshot =
+      const snapshotResult =
         detail.action === "save-hit-dice"
           ? saveShortRestHitDiceUsage(detail.hitDiceUsed)
           : detail.action === "sync-hit-dice"
             ? syncShortRestHitDiceUsage(detail.hitDiceUsed)
-            : createShortRestSnapshot();
+            : detail.action === "take-short-rest"
+              ? takeShortRestHitDiceUsage(detail.hitDiceUsed)
+              : createShortRestSnapshot();
 
-      dispatchShortRestResponse(detail.requestId, {
-        ok: true,
-        snapshot,
-      });
+      Promise.resolve(snapshotResult)
+        .then((snapshot) => {
+          dispatchShortRestResponse(detail.requestId, {
+            ok: true,
+            snapshot,
+          });
+        })
+        .catch((error) => {
+          dispatchShortRestResponse(detail.requestId, {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
     } catch (error) {
       dispatchShortRestResponse(detail.requestId, {
         ok: false,

@@ -635,13 +635,43 @@
     }
   }
 
-  function handleTakeShortRestCapture() {
+  async function handleTakeShortRestCapture(event) {
     if (!getExtensionSettings().shortRestHitDiceEnabled) {
       return;
     }
 
-    syncShortRestBridgeState(getPendingShortRestUsage());
-    shortRestUiState.dirty = false;
+    event.preventDefault();
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === "function") {
+      event.stopImmediatePropagation();
+    }
+
+    const button = event.currentTarget;
+    if (button?.dataset?.fbTakeShortRestPending === "true") {
+      return;
+    }
+
+    if (button instanceof HTMLButtonElement) {
+      button.dataset.fbTakeShortRestPending = "true";
+      button.disabled = true;
+    }
+
+    setShortRestStatus("Taking short rest...", "pending");
+
+    try {
+      await requestShortRestBridge("take-short-rest", getPendingShortRestUsage());
+      shortRestUiState.dirty = false;
+      scheduleRefresh();
+    } catch (error) {
+      console.error("[Further Beyond] Could not take short rest.", error);
+      shortRestUiState.dirty = true;
+      setShortRestStatus("Could not take short rest.", "error");
+    } finally {
+      if (button instanceof HTMLButtonElement && button.isConnected) {
+        delete button.dataset.fbTakeShortRestPending;
+        button.disabled = false;
+      }
+    }
   }
 
   function cleanupShortRestEnhancements() {
