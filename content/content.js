@@ -13,10 +13,18 @@
   const ITEM_IGNORE_TOGGLE_CLASS = "fb-item-ignore-toggle";
   const SPEED_PENALTY_ID = "fb-speed-penalty";
   const SPEED_WARNING_ID = "fb-speed-warning";
+  const CONFIG_TRIGGER_ID = "fb-config-trigger";
+  const CONFIG_MODAL_ID = "fb-config-modal";
   const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
   const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
   const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
   const IGNORE_WEIGHT_STORAGE_KEY_PREFIX = "fb:ignored-weight:";
+  const EXTENSION_SETTINGS_STORAGE_KEY = "fb:settings";
+  const DEFAULT_EXTENSION_SETTINGS = Object.freeze({
+    itemSlotsEnabled: true,
+    coinsHaveWeight: true,
+    coinsPerSlot: 250,
+  });
   const HEADING_SELECTORS = [
     "main .ddbc-character-tidbits__heading h1",
     "main h1.styles_characterName__2x8wQ",
@@ -40,8 +48,15 @@
     pendingRequests: new Map(),
     activeInventoryPromise: null,
   };
+  const extensionSettingsState = {
+    value: { ...DEFAULT_EXTENSION_SETTINGS },
+    loadPromise: null,
+    loaded: false,
+    listenerBound: false,
+  };
 
   let refreshPending = false;
+  let settingsStatusTimeoutId = null;
 
   function findCharacterHeading() {
     for (const selector of HEADING_SELECTORS) {
@@ -84,6 +99,327 @@
     return true;
   }
 
+  function findManageButton() {
+    const candidates = Array.from(
+      document.querySelectorAll("main button, main a, main [role='button']")
+    ).filter((element) => {
+      if (element.id === CONFIG_TRIGGER_ID) {
+        return false;
+      }
+
+      return (
+        isElementVisible(element) &&
+        normalizeText(element.textContent).toUpperCase() === "MANAGE"
+      );
+    });
+
+    if (!candidates.length) {
+      return null;
+    }
+
+    candidates.sort((left, right) => {
+      const leftRect = left.getBoundingClientRect();
+      const rightRect = right.getBoundingClientRect();
+
+      if (leftRect.top !== rightRect.top) {
+        return leftRect.top - rightRect.top;
+      }
+
+      return leftRect.left - rightRect.left;
+    });
+
+    return candidates[0];
+  }
+
+  function handleConfigTriggerClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    openConfigModal();
+  }
+
+  function createConfigTrigger(manageButton) {
+    const tagName = manageButton?.tagName?.toLowerCase() === "a" ? "a" : "button";
+    const trigger = document.createElement(tagName);
+    const content = document.createElement("span");
+    const label = document.createElement("span");
+
+    trigger.id = CONFIG_TRIGGER_ID;
+    trigger.className = manageButton?.className || "";
+    trigger.dataset.fbConfigTrigger = "true";
+    trigger.setAttribute("aria-haspopup", "dialog");
+    trigger.setAttribute("aria-controls", CONFIG_MODAL_ID);
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.title = "Open Further Beyond settings";
+
+    if (tagName === "button") {
+      trigger.type = "button";
+    } else {
+      trigger.href = "#";
+      trigger.setAttribute("role", "button");
+    }
+
+    content.className = "fb-config-trigger__content";
+
+    label.className = "fb-config-trigger__label";
+    label.textContent = "FURTHER BEYOND";
+
+    content.appendChild(label);
+    trigger.replaceChildren(content);
+    trigger.addEventListener("click", handleConfigTriggerClick);
+
+    return trigger;
+  }
+
+  function mountConfigTrigger() {
+    const manageButton = findManageButton();
+    if (!manageButton) {
+      return false;
+    }
+
+    let trigger = document.getElementById(CONFIG_TRIGGER_ID);
+    if (!trigger) {
+      trigger = createConfigTrigger(manageButton);
+    }
+
+    if (trigger.previousElementSibling !== manageButton) {
+      manageButton.insertAdjacentElement("afterend", trigger);
+    }
+
+    return true;
+  }
+
+  function getConfigModal() {
+    return document.getElementById(CONFIG_MODAL_ID);
+  }
+
+  function setConfigStatus(message, state) {
+    const modal = getConfigModal();
+    const status = modal?.querySelector(".fb-config-modal__status");
+    if (!status) {
+      return;
+    }
+
+    window.clearTimeout(settingsStatusTimeoutId);
+    settingsStatusTimeoutId = null;
+    status.textContent = message || "";
+
+    if (state) {
+      status.dataset.state = state;
+    } else {
+      delete status.dataset.state;
+    }
+
+    if (message && state !== "error") {
+      settingsStatusTimeoutId = window.setTimeout(() => {
+        setConfigStatus("", "");
+      }, 1400);
+    }
+  }
+
+  function updateConfigFormDisabledState(settings) {
+    const modal = getConfigModal();
+    if (!modal) {
+      return;
+    }
+
+    const coinSettings = modal.querySelector(".fb-config-modal__coin-settings");
+    const coinsHaveWeight = modal.querySelector("#fb-settings-coins-have-weight");
+    const coinsPerSlot = modal.querySelector("#fb-settings-coins-per-slot");
+    const itemSlotsEnabled = !!settings.itemSlotsEnabled;
+    const coinsEnabled = itemSlotsEnabled && !!settings.coinsHaveWeight;
+
+    if (coinSettings) {
+      coinSettings.setAttribute("aria-disabled", itemSlotsEnabled ? "false" : "true");
+    }
+
+    if (coinsHaveWeight) {
+      coinsHaveWeight.disabled = !itemSlotsEnabled;
+    }
+
+    if (coinsPerSlot) {
+      coinsPerSlot.disabled = !coinsEnabled;
+    }
+  }
+
+  function syncConfigForm(settings) {
+    const modal = getConfigModal();
+    if (!modal) {
+      return;
+    }
+
+    const itemSlotsEnabled = modal.querySelector("#fb-settings-item-slots-enabled");
+    const coinsHaveWeight = modal.querySelector("#fb-settings-coins-have-weight");
+    const coinsPerSlot = modal.querySelector("#fb-settings-coins-per-slot");
+
+    if (itemSlotsEnabled) {
+      itemSlotsEnabled.checked = !!settings.itemSlotsEnabled;
+    }
+
+    if (coinsHaveWeight) {
+      coinsHaveWeight.checked = !!settings.coinsHaveWeight;
+    }
+
+    if (coinsPerSlot) {
+      coinsPerSlot.value = String(settings.coinsPerSlot);
+    }
+
+    updateConfigFormDisabledState(settings);
+  }
+
+  function readConfigFormSettings() {
+    const modal = getConfigModal();
+    return normalizeExtensionSettings({
+      itemSlotsEnabled:
+        modal?.querySelector("#fb-settings-item-slots-enabled")?.checked ??
+        DEFAULT_EXTENSION_SETTINGS.itemSlotsEnabled,
+      coinsHaveWeight:
+        modal?.querySelector("#fb-settings-coins-have-weight")?.checked ??
+        DEFAULT_EXTENSION_SETTINGS.coinsHaveWeight,
+      coinsPerSlot:
+        modal?.querySelector("#fb-settings-coins-per-slot")?.value ??
+        DEFAULT_EXTENSION_SETTINGS.coinsPerSlot,
+    });
+  }
+
+  async function handleConfigFormChange() {
+    const settings = readConfigFormSettings();
+    syncConfigForm(settings);
+
+    try {
+      await saveExtensionSettings(settings);
+      setConfigStatus("Saved.", "ok");
+      scheduleRefresh();
+    } catch (error) {
+      console.error("[Further Beyond] Could not save extension settings.", error);
+      setConfigStatus("Could not save settings.", "error");
+      syncConfigForm(getExtensionSettings());
+    }
+  }
+
+  function closeConfigModal() {
+    const modal = getConfigModal();
+    const trigger = document.getElementById(CONFIG_TRIGGER_ID);
+    if (!modal) {
+      return;
+    }
+
+    modal.hidden = true;
+    document.body.classList.remove("fb-config-modal-open");
+
+    if (trigger) {
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.focus();
+    }
+  }
+
+  function handleConfigModalClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    if (
+      target.matches("[data-fb-config-close='true']") ||
+      target.classList.contains("fb-config-modal")
+    ) {
+      closeConfigModal();
+    }
+  }
+
+  function handleConfigModalKeydown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeConfigModal();
+    }
+  }
+
+  function createConfigModal() {
+    const modal = document.createElement("div");
+
+    modal.id = CONFIG_MODAL_ID;
+    modal.className = "fb-config-modal";
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="fb-config-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="fb-config-modal-title" tabindex="-1">
+        <button type="button" class="fb-config-modal__close" data-fb-config-close="true" aria-label="Close settings">x</button>
+        <header class="fb-config-modal__header">
+          <p class="fb-config-modal__eyebrow">Further Beyond</p>
+          <h2 id="fb-config-modal-title">Feature Settings</h2>
+          <p class="fb-config-modal__intro">Changes save automatically and apply immediately.</p>
+        </header>
+        <form class="fb-config-modal__form">
+          <section class="fb-config-modal__card">
+            <label class="fb-config-modal__toggle" for="fb-settings-item-slots-enabled">
+              <span class="fb-config-modal__copy">
+                <span class="fb-config-modal__label">Use item slots</span>
+                <span class="fb-config-modal__description">Shows slot totals, inventory badges, and speed penalties.</span>
+              </span>
+              <input id="fb-settings-item-slots-enabled" type="checkbox" />
+            </label>
+          </section>
+          <section class="fb-config-modal__card fb-config-modal__coin-settings">
+            <label class="fb-config-modal__toggle" for="fb-settings-coins-have-weight">
+              <span class="fb-config-modal__copy">
+                <span class="fb-config-modal__label">Coins have weight</span>
+                <span class="fb-config-modal__description">Counts carried coins toward slot usage.</span>
+              </span>
+              <input id="fb-settings-coins-have-weight" type="checkbox" />
+            </label>
+            <label class="fb-config-modal__field" for="fb-settings-coins-per-slot">
+              <span class="fb-config-modal__label">Coins per slot</span>
+              <input id="fb-settings-coins-per-slot" type="number" inputmode="numeric" min="1" step="1" />
+            </label>
+            <p class="fb-config-modal__hint">Set how many total coins equal one slot when coin weight is enabled.</p>
+          </section>
+        </form>
+        <p class="fb-config-modal__status" role="status" aria-live="polite"></p>
+      </div>
+    `;
+
+    modal.addEventListener("click", handleConfigModalClick);
+    modal.addEventListener("keydown", handleConfigModalKeydown);
+    modal.querySelector(".fb-config-modal__form")?.addEventListener(
+      "change",
+      handleConfigFormChange
+    );
+
+    return modal;
+  }
+
+  function ensureConfigModal() {
+    let modal = getConfigModal();
+    if (!modal) {
+      modal = createConfigModal();
+      document.body.appendChild(modal);
+    }
+
+    syncConfigForm(getExtensionSettings());
+    return modal;
+  }
+
+  function openConfigModal() {
+    const modal = ensureConfigModal();
+    const dialog = modal.querySelector(".fb-config-modal__dialog");
+    const firstField = modal.querySelector("#fb-settings-item-slots-enabled");
+
+    syncConfigForm(getExtensionSettings());
+    setConfigStatus("", "");
+    modal.hidden = false;
+    document.body.classList.add("fb-config-modal-open");
+    document.getElementById(CONFIG_TRIGGER_ID)?.setAttribute("aria-expanded", "true");
+
+    window.requestAnimationFrame(() => {
+      if (firstField instanceof HTMLElement) {
+        firstField.focus();
+        return;
+      }
+
+      if (dialog instanceof HTMLElement) {
+        dialog.focus();
+      }
+    });
+  }
+
   function parseInteger(text) {
     if (!text) return null;
 
@@ -105,6 +441,159 @@
     });
 
     return `rgba(${channel[0]}, ${channel[1]}, ${channel[2]}, ${alpha})`;
+  }
+
+  function parsePositiveInteger(value, fallbackValue) {
+    const parsedValue = Number.parseInt(String(value ?? ""), 10);
+    return Number.isFinite(parsedValue) && parsedValue > 0
+      ? parsedValue
+      : fallbackValue;
+  }
+
+  function normalizeText(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isElementVisible(element) {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+
+    const style = window.getComputedStyle(element);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function normalizeExtensionSettings(value) {
+    return {
+      itemSlotsEnabled: value?.itemSlotsEnabled !== false,
+      coinsHaveWeight: value?.coinsHaveWeight !== false,
+      coinsPerSlot: parsePositiveInteger(
+        value?.coinsPerSlot,
+        DEFAULT_EXTENSION_SETTINGS.coinsPerSlot
+      ),
+    };
+  }
+
+  function loadExtensionSettings() {
+    return new Promise((resolve) => {
+      if (!chrome?.storage?.sync?.get) {
+        resolve({ ...DEFAULT_EXTENSION_SETTINGS });
+        return;
+      }
+
+      try {
+        chrome.storage.sync.get(EXTENSION_SETTINGS_STORAGE_KEY, (result) => {
+          if (chrome.runtime?.lastError) {
+            console.warn(
+              "[Further Beyond] Could not load extension settings.",
+              chrome.runtime.lastError
+            );
+            resolve({ ...DEFAULT_EXTENSION_SETTINGS });
+            return;
+          }
+
+          resolve(
+            normalizeExtensionSettings(result?.[EXTENSION_SETTINGS_STORAGE_KEY])
+          );
+        });
+      } catch (error) {
+        console.warn("[Further Beyond] Could not load extension settings.", error);
+        resolve({ ...DEFAULT_EXTENSION_SETTINGS });
+      }
+    });
+  }
+
+  function saveExtensionSettings(settingsInput) {
+    const normalizedSettings = normalizeExtensionSettings(settingsInput);
+
+    return new Promise((resolve, reject) => {
+      if (!chrome?.storage?.sync?.set) {
+        extensionSettingsState.value = normalizedSettings;
+        extensionSettingsState.loaded = true;
+        resolve(normalizedSettings);
+        return;
+      }
+
+      try {
+        chrome.storage.sync.set(
+          {
+            [EXTENSION_SETTINGS_STORAGE_KEY]: normalizedSettings,
+          },
+          () => {
+            if (chrome.runtime?.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+
+            extensionSettingsState.value = normalizedSettings;
+            extensionSettingsState.loaded = true;
+            resolve(normalizedSettings);
+          }
+        );
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function getExtensionSettings() {
+    return extensionSettingsState.value;
+  }
+
+  function handleExtensionSettingsChange(changes, areaName) {
+    if (areaName !== "sync" || !changes[EXTENSION_SETTINGS_STORAGE_KEY]) {
+      return;
+    }
+
+    extensionSettingsState.value = normalizeExtensionSettings(
+      changes[EXTENSION_SETTINGS_STORAGE_KEY].newValue
+    );
+    extensionSettingsState.loaded = true;
+    syncConfigForm(extensionSettingsState.value);
+    scheduleRefresh();
+  }
+
+  function ensureExtensionSettingsListener() {
+    if (
+      extensionSettingsState.listenerBound ||
+      !chrome?.storage?.onChanged?.addListener
+    ) {
+      return;
+    }
+
+    chrome.storage.onChanged.addListener(handleExtensionSettingsChange);
+    extensionSettingsState.listenerBound = true;
+  }
+
+  async function ensureExtensionSettingsLoaded() {
+    ensureExtensionSettingsListener();
+
+    if (extensionSettingsState.loaded) {
+      return extensionSettingsState.value;
+    }
+
+    if (extensionSettingsState.loadPromise) {
+      return extensionSettingsState.loadPromise;
+    }
+
+    extensionSettingsState.loadPromise = loadExtensionSettings()
+      .then((settings) => {
+        extensionSettingsState.value = settings;
+        extensionSettingsState.loaded = true;
+        return settings;
+      })
+      .finally(() => {
+        extensionSettingsState.loadPromise = null;
+      });
+
+    return extensionSettingsState.loadPromise;
   }
 
   function getStrengthCapacity() {
@@ -395,6 +884,10 @@
     }
 
     if (anchor.replaceContents) {
+      if (anchor.element.dataset.fbOriginalHtml === undefined) {
+        anchor.element.dataset.fbOriginalHtml = anchor.element.innerHTML;
+      }
+
       if (toggle.parentElement !== anchor.element || anchor.element.childNodes.length !== 1) {
         anchor.element.replaceChildren(toggle);
       }
@@ -507,7 +1000,10 @@
 
       window.dispatchEvent(
         new CustomEvent(INVENTORY_REQUEST_EVENT, {
-          detail: { requestId },
+          detail: {
+            requestId,
+            settings: getExtensionSettings(),
+          },
         })
       );
     });
@@ -610,16 +1106,21 @@
     return `Coins: ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"}`;
   }
 
-  function formatCoinSlotTooltip(coinSlots, totalCoins) {
+  function formatCoinSlotTooltip(coinSlots, totalCoins, coinsPerSlot) {
     if (!Number.isFinite(coinSlots)) {
       return "";
     }
 
+    const normalizedCoinsPerSlot = parsePositiveInteger(
+      coinsPerSlot,
+      DEFAULT_EXTENSION_SETTINGS.coinsPerSlot
+    );
+
     if (Number.isFinite(totalCoins)) {
-      return `Coins are occupying ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"}. ${totalCoins.toLocaleString()} total coins / 250 = ${coinSlots}.`;
+      return `Coins are occupying ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"}. ${totalCoins.toLocaleString()} total coins / ${normalizedCoinsPerSlot.toLocaleString()} = ${coinSlots}.`;
     }
 
-    return `Coins are occupying ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"} at 250 coins per slot.`;
+    return `Coins are occupying ${coinSlots} ${coinSlots === 1 ? "slot" : "slots"} at ${normalizedCoinsPerSlot.toLocaleString()} coins per slot.`;
   }
 
   function updateSlotOverviewButton(
@@ -629,10 +1130,16 @@
     totalCoins,
     coinSlots,
     overBy,
-    speedPenaltyState
+    speedPenaltyState,
+    coinsPerSlot
   ) {
     const button = overview.querySelector(".styles_overviewPrimaryButton__j84A5, button");
     if (!button) return;
+
+    if (button.dataset.fbOriginalHtml === undefined) {
+      button.dataset.fbOriginalHtml = button.innerHTML;
+      button.dataset.fbOriginalTitle = button.title || "";
+    }
 
     button.classList.add("fb-slot-overview-button");
 
@@ -649,7 +1156,11 @@
     const noteValue = content.querySelector(".fb-slot-overview__coin-value");
     const intensity = speedPenaltyState?.intensity ?? 0;
     const coinSlotNote = formatCoinSlotNote(coinSlots);
-    const coinSlotTooltip = formatCoinSlotTooltip(coinSlots, totalCoins);
+    const coinSlotTooltip = formatCoinSlotTooltip(
+      coinSlots,
+      totalCoins,
+      coinsPerSlot
+    );
 
     value.textContent = `${usedSlots} / ${capacity}`;
     note.hidden = !coinSlotNote;
@@ -713,6 +1224,65 @@
     ]
       .filter(Boolean)
       .join(" ");
+  }
+
+  function clearSlotOverviewButton(button) {
+    button.classList.remove("fb-slot-overview-button");
+    button.removeAttribute("data-fb-slot-state");
+    button.style.removeProperty("--fb-slot-button-border");
+    button.style.removeProperty("--fb-slot-button-bg-top");
+    button.style.removeProperty("--fb-slot-button-bg-bottom");
+    button.style.removeProperty("--fb-slot-button-value");
+
+    if (button.dataset.fbOriginalHtml !== undefined) {
+      button.innerHTML = button.dataset.fbOriginalHtml;
+      delete button.dataset.fbOriginalHtml;
+    } else {
+      button.querySelector(".fb-slot-overview")?.remove();
+    }
+
+    if (button.dataset.fbOriginalTitle) {
+      button.title = button.dataset.fbOriginalTitle;
+    } else {
+      button.removeAttribute("title");
+    }
+
+    delete button.dataset.fbOriginalTitle;
+  }
+
+  function clearInventorySlotUi() {
+    resetSpeedPenalty();
+
+    document
+      .querySelectorAll(
+        ".ct-equipment__overview .fb-slot-overview-button, .ct-equipment__overview .styles_overviewPrimaryButton__j84A5[data-fb-original-html]"
+      )
+      .forEach((button) => {
+        clearSlotOverviewButton(button);
+      });
+
+    document
+      .querySelectorAll(".ct-equipment [data-fb-original-html]")
+      .forEach((element) => {
+        if (element.closest(".ct-equipment__overview")) {
+          return;
+        }
+
+        element.innerHTML = element.dataset.fbOriginalHtml;
+        delete element.dataset.fbOriginalHtml;
+      });
+
+    document.querySelectorAll(`.${CONTAINER_BADGE_CLASS}`).forEach((badge) => {
+      badge.remove();
+    });
+
+    document.querySelectorAll(`.${ITEM_IGNORE_TOGGLE_CLASS}`).forEach((toggle) => {
+      toggle.remove();
+    });
+
+    document.querySelectorAll("[data-fb-weight-ignored]").forEach((row) => {
+      row.removeAttribute("data-fb-weight-ignored");
+    });
   }
 
   function getSpeedBoxState() {
@@ -848,6 +1418,13 @@
       resetInventorySnapshot(characterKey);
     }
 
+    const settings = getExtensionSettings();
+    if (!settings.itemSlotsEnabled) {
+      resetInventorySnapshot(characterKey);
+      clearInventorySlotUi();
+      return false;
+    }
+
     const ignoredItemCount = ensureIgnoredWeightState(characterKey).size;
 
     let pageSnapshot = null;
@@ -936,7 +1513,8 @@
       totalCoins,
       coinSlots,
       overBy,
-      speedPenaltyState
+      speedPenaltyState,
+      settings.coinsPerSlot
     );
 
     visibleContainers.forEach((container) => {
@@ -961,6 +1539,8 @@
   async function refreshUi() {
     refreshPending = false;
     mountIndicator();
+    await ensureExtensionSettingsLoaded();
+    mountConfigTrigger();
     await mountInventorySlots();
   }
 
@@ -992,6 +1572,13 @@
           handleInventorySnapshotResponse
         );
       }
+      if (
+        extensionSettingsState.listenerBound &&
+        chrome?.storage?.onChanged?.removeListener
+      ) {
+        chrome.storage.onChanged.removeListener(handleExtensionSettingsChange);
+      }
+      window.clearTimeout(settingsStatusTimeoutId);
     },
     { once: true }
   );

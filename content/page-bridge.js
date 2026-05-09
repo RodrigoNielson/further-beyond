@@ -9,6 +9,10 @@
 
   const REQUEST_EVENT = "fb:inventory-request";
   const RESPONSE_EVENT = "fb:inventory-response";
+  const DEFAULT_INVENTORY_SETTINGS = Object.freeze({
+    coinsHaveWeight: true,
+    coinsPerSlot: 250,
+  });
   const bridgeState = {
     requireFn: null,
     rulesConfigModule: null,
@@ -105,6 +109,23 @@
     return 0;
   }
 
+  function parsePositiveInteger(value, fallbackValue) {
+    const parsedValue = Number.parseInt(String(value ?? ""), 10);
+    return Number.isFinite(parsedValue) && parsedValue > 0
+      ? parsedValue
+      : fallbackValue;
+  }
+
+  function normalizeInventorySettings(value) {
+    return {
+      coinsHaveWeight: value?.coinsHaveWeight !== false,
+      coinsPerSlot: parsePositiveInteger(
+        value?.coinsPerSlot,
+        DEFAULT_INVENTORY_SETTINGS.coinsPerSlot
+      ),
+    };
+  }
+
   function getTotalCoins(character) {
     const currencies = character?.currencies;
     if (!currencies) {
@@ -117,23 +138,28 @@
     );
   }
 
-  function getCoinSlots(character) {
-    return Math.floor(getTotalCoins(character) / 250);
+  function getCoinSlots(character, settings) {
+    if (!settings.coinsHaveWeight) {
+      return null;
+    }
+
+    return Math.floor(getTotalCoins(character) / settings.coinsPerSlot);
   }
 
-  function createInventorySnapshot() {
+  function createInventorySnapshot(settingsInput) {
+    const settings = normalizeInventorySettings(settingsInput);
     const character = getCurrentRulesConfig()?.store?.getState?.()?.character;
     const inventory = Array.isArray(character?.inventory) ? character.inventory : [];
     const itemSlots = inventory.filter((item) => !item?.definition?.isContainer).length;
     const totalCoins = getTotalCoins(character);
-    const coinSlots = getCoinSlots(character);
+    const coinSlots = getCoinSlots(character, settings);
     const strengthScore = getEffectiveStat(character, 1);
 
     return {
       characterKey: String(character?.id || ""),
       totalCoins,
       coinSlots,
-      usedSlots: itemSlots + coinSlots,
+      usedSlots: itemSlots + (Number.isFinite(coinSlots) ? coinSlots : 0),
       capacity: Number.isFinite(strengthScore) ? strengthScore + 8 : null,
     };
   }
@@ -158,7 +184,7 @@
     try {
       dispatchResponse(detail.requestId, {
         ok: true,
-        snapshot: createInventorySnapshot(),
+        snapshot: createInventorySnapshot(detail.settings),
       });
     } catch (error) {
       dispatchResponse(detail.requestId, {

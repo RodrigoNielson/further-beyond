@@ -1,0 +1,148 @@
+:root {
+  color-scheme: light;
+  --fb-popup-bg-top: #f7f0df;
+  --fb-popup-bg-bottom: #dac7a1;
+  --fb-popup-card: rgba(255, 249, 236, 0.9);
+  --fb-popup-ink: #2d2115;
+  --fb-popup-muted: #6d5a3d;
+  --fb-popup-accent: #8c5d2f;
+  --fb-popup-accent-strong: #603813;
+  --fb-popup-line: rgba(96, 56, 19, 0.18);
+  --fb-popup-shadow: 0 14px 28px rgba(77, 52, 26, 0.14);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 340px;
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.46), transparent 38%),
+    linear-gradient(180deg, var(--fb-popup-bg-top), var(--fb-popup-bg-bottom));
+  color: var(--fb-popup-ink);
+  font-family: Georgia, "Palatino Linotype", "Book Antiqua", ui-serif, serif;
+}
+
+.popup {
+  padding: 16px;
+}
+
+.popup__header {
+  margin-bottom: 14px;
+}
+
+.popup__eyebrow {
+  margin: 0 0 4px;
+  color: var(--fb-popup-accent);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.popup__header h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.popup__intro {
+  margin: 8px 0 0;
+  color: var(--fb-popup-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.popup__form {
+  display: grid;
+  gap: 12px;
+}
+
+.setting-card {
+  padding: 14px;
+  border: 1px solid var(--fb-popup-line);
+  border-radius: 14px;
+  background: var(--fb-popup-card);
+  box-shadow: var(--fb-popup-shadow);
+}
+
+.setting-card[aria-disabled="true"] {
+  opacity: 0.62;
+}
+
+.setting-toggle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.setting-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.setting-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.setting-description,
+.setting-hint {
+  color: var(--fb-popup-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.setting-toggle input[type="checkbox"] {
+  margin: 2px 0 0;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--fb-popup-accent);
+  cursor: pointer;
+}
+
+.setting-field {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.setting-field input[type="number"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(96, 56, 19, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--fb-popup-ink);
+  font: inherit;
+}
+
+.setting-field input[type="number"]:focus {
+  outline: 2px solid rgba(140, 93, 47, 0.2);
+  border-color: rgba(140, 93, 47, 0.5);
+}
+
+.setting-field input[type="number"]:disabled,
+.setting-toggle input[type="checkbox"]:disabled {
+  cursor: default;
+}
+
+.setting-hint {
+  margin: 10px 0 0;
+}
+
+.popup__status {
+  min-height: 18px;
+  margin: 12px 2px 0;
+  color: var(--fb-popup-accent-strong);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.popup__status[data-state="error"] {
+  color: #8d2b1f;
+}
