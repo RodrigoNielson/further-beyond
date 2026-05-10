@@ -35,6 +35,7 @@
   const EXTENSION_SETTINGS_STORAGE_KEY = "fb:settings";
   const DDDICE_LOCAL_STATE_STORAGE_KEY = "fb:dddice:local-state";
   const DDDICE_API_BASE_URL = "https://dddice.com/api/1.0";
+  const DDDICE_ACCOUNT_ACTIVATE_URL = "https://dddice.com/activate";
   const SHORT_REST_ACTION_CLASS = "fb-short-rest-action";
   const SHORT_REST_USE_BUTTON_CLASS = "fb-short-rest-use-hit-die";
   const SHORT_REST_STATUS_CLASS = "fb-short-rest-status";
@@ -128,10 +129,16 @@
     draftRoomName: "",
     activeRoomSlug: "",
     activeRoomName: "",
+    authKind: "guest",
     authToken: "",
     userName: "",
     userId: "",
     themeId: "",
+    availableThemes: [],
+    themeOptionsLoading: false,
+    accountActivationCode: "",
+    accountActivationExpiresAt: "",
+    accountActivationPending: false,
     statusMessage: "",
     rollHistory: [],
   };
@@ -145,6 +152,9 @@
     visualizerRoomSlug: "",
     visualizerThemeId: "",
     visualizerError: "",
+    themeOptionsPromise: null,
+    accountActivationSecret: "",
+    accountActivationPollTimeoutId: null,
   };
 
   let refreshPending = false;
@@ -537,6 +547,20 @@
     return "idle";
   }
 
+  function normalizeDddiceAuthKind(value) {
+    return String(value || "").trim().toLowerCase() === "account"
+      ? "account"
+      : "guest";
+  }
+
+  function isDddiceAccountSession() {
+    return normalizeDddiceAuthKind(dddiceUiState.authKind) === "account";
+  }
+
+  function getDddiceSessionActorLabel() {
+    return isDddiceAccountSession() ? "Account" : "Guest";
+  }
+
   function normalizeDddiceLocalState(value) {
     const rollHistory = Array.isArray(value?.rollHistory)
       ? value.rollHistory
@@ -551,6 +575,7 @@
       draftRoomName: String(value?.draftRoomName ?? value?.roomName ?? "").trim(),
       activeRoomSlug: normalizeDddiceRoomSlug(value?.activeRoomSlug || ""),
       activeRoomName: String(value?.activeRoomName || "").trim(),
+      authKind: normalizeDddiceAuthKind(value?.authKind),
       authToken: String(value?.authToken || "").trim(),
       userName: String(value?.userName || "").trim(),
       userId: String(value?.userId || "").trim(),
@@ -595,6 +620,7 @@
       draftRoomName: dddiceUiState.draftRoomName,
       activeRoomSlug: dddiceUiState.activeRoomSlug,
       activeRoomName: dddiceUiState.activeRoomName,
+      authKind: dddiceUiState.authKind,
       authToken: dddiceUiState.authToken,
       userName: dddiceUiState.userName,
       userId: dddiceUiState.userId,
@@ -647,6 +673,7 @@
         dddiceUiState.draftRoomName = localState.draftRoomName;
         dddiceUiState.activeRoomSlug = localState.activeRoomSlug;
         dddiceUiState.activeRoomName = localState.activeRoomName;
+        dddiceUiState.authKind = localState.authKind;
         dddiceUiState.authToken = localState.authToken;
         dddiceUiState.userName = localState.userName;
         dddiceUiState.userId = localState.userId;
@@ -664,6 +691,10 @@
   }
 
   function getDddiceStateLabel() {
+    if (dddiceUiState.accountActivationPending && !dddiceUiState.authToken) {
+      return "Linking";
+    }
+
     if (dddiceUiState.connectionState === "connected") {
       return "Connected";
     }
@@ -680,7 +711,7 @@
       return "Attention";
     }
 
-    return "Guest mode";
+    return `${getDddiceSessionActorLabel()} mode`;
   }
 
   function getDddiceStatusMessage() {
@@ -702,14 +733,14 @@
 
     if (dddiceUiState.connectionState === "ready") {
       if (dddiceUiState.userName) {
-        return `Guest session ready as ${dddiceUiState.userName}.`;
+        return `${getDddiceSessionActorLabel()} session ready as ${dddiceUiState.userName}.`;
       }
 
-      return "Guest session ready.";
+      return `${getDddiceSessionActorLabel()} session ready.`;
     }
 
     if (dddiceUiState.connectionState === "connecting") {
-      return "Connecting guest session...";
+      return `Connecting ${getDddiceSessionActorLabel().toLowerCase()} session...`;
     }
 
     if (dddiceUiState.connectionState === "error") {
@@ -720,7 +751,7 @@
       return "Room draft saved locally.";
     }
 
-    return "Guest setup has not started yet.";
+    return `${getDddiceSessionActorLabel()} setup has not started yet.`;
   }
 
   function getDddiceRoomLabel() {
@@ -1204,7 +1235,7 @@
     }
 
     if (!hasSession) {
-      return "Connect a guest session to start the 3D DDDice tray.";
+      return "Connect a DDDice guest or account session to start the 3D DDDice tray.";
     }
 
     if (!hasRoom) {
@@ -1667,6 +1698,7 @@
       '[data-fb-dddice-role="canvas-status"]'
     );
     const user = drawer.querySelector(".fb-dddice-drawer__user");
+    const userKind = drawer.querySelector('[data-fb-dddice-role="user-kind"]');
     const userValue = drawer.querySelector(".fb-dddice-drawer__user-value");
     const room = drawer.querySelector(".fb-dddice-drawer__room");
     const roomValue = drawer.querySelector(".fb-dddice-drawer__room-value");
@@ -1743,6 +1775,10 @@
       user.hidden = !userLabel;
     }
 
+    if (userKind instanceof HTMLElement) {
+      userKind.textContent = getDddiceSessionActorLabel();
+    }
+
     if (userValue) {
       userValue.textContent = userLabel;
     }
@@ -1793,7 +1829,11 @@
 
     if (connectButton instanceof HTMLButtonElement) {
       connectButton.disabled = isBusy;
-      connectButton.textContent = hasSession ? "Refresh guest" : "Connect guest";
+      connectButton.textContent = isDddiceAccountSession()
+        ? "Switch to guest"
+        : hasSession
+          ? "Refresh guest"
+          : "Connect guest";
     }
 
     if (createRoomButton instanceof HTMLButtonElement) {
@@ -1850,15 +1890,41 @@
     const statusCopy = panel.querySelector(".fb-dddice-drawer__status-copy");
     const configHint = panel.querySelector('[data-fb-dddice-role="config-hint"]');
     const user = panel.querySelector(".fb-dddice-drawer__user");
+    const userKind = panel.querySelector('[data-fb-dddice-role="user-kind"]');
     const userValue = panel.querySelector(".fb-dddice-drawer__user-value");
     const room = panel.querySelector(".fb-dddice-drawer__room");
     const roomValue = panel.querySelector(".fb-dddice-drawer__room-value");
     const roomNameInput = panel.querySelector('[data-fb-dddice-field="draftRoomName"]');
     const roomSlugInput = panel.querySelector('[data-fb-dddice-field="draftRoomSlug"]');
+    const themeSelect = panel.querySelector('[data-fb-dddice-field="themeId"]');
+    const themeHint = panel.querySelector('[data-fb-dddice-role="theme-hint"]');
     const connectButton = panel.querySelector('[data-fb-dddice-action="connect-guest"]');
+    const accountButton = panel.querySelector('[data-fb-dddice-action="connect-account"]');
     const createRoomButton = panel.querySelector('[data-fb-dddice-action="create-room"]');
     const joinRoomButton = panel.querySelector('[data-fb-dddice-action="join-room"]');
     const view3dRoomButton = panel.querySelector('[data-fb-dddice-action="open-3d-room"]');
+    const accountActivation = panel.querySelector('[data-fb-dddice-role="account-activation"]');
+    const activationCode = panel.querySelector('[data-fb-dddice-role="activation-code"]');
+    const activationCopy = panel.querySelector('[data-fb-dddice-role="activation-copy"]');
+    const openActivationButton = panel.querySelector(
+      '[data-fb-dddice-action="open-account-activation"]'
+    );
+    const cancelActivationButton = panel.querySelector(
+      '[data-fb-dddice-action="cancel-account-connect"]'
+    );
+    const availableThemes = Array.isArray(dddiceUiState.availableThemes)
+      ? dddiceUiState.availableThemes
+      : [];
+    const isAccountLinkPending =
+      !!dddiceUiState.accountActivationPending &&
+      !!String(dddiceUiState.accountActivationCode || "").trim();
+    const selectedThemeId = String(dddiceUiState.themeId || "").trim();
+    const fallbackThemeLabel = selectedThemeId || "Current skin";
+    const themeOptions = availableThemes.length
+      ? availableThemes
+      : selectedThemeId
+        ? [{ id: selectedThemeId, name: fallbackThemeLabel }]
+        : [];
 
     panel.dataset.enabled = integrationEnabled ? "true" : "false";
 
@@ -1876,11 +1942,15 @@
     if (configHint instanceof HTMLElement) {
       configHint.textContent = hasActiveRoom
         ? "Use D&D Beyond's bottom-left dice button to open the DDDice custom roller."
-        : "Connect a guest and join or create a room here, then use D&D Beyond's bottom-left dice button to roll with DDDice.";
+        : "Connect a guest or link your DDDice account here, then join or create a room before rolling from D&D Beyond.";
     }
 
     if (user instanceof HTMLElement) {
       user.hidden = !userLabel;
+    }
+
+    if (userKind instanceof HTMLElement) {
+      userKind.textContent = getDddiceSessionActorLabel();
     }
 
     if (userValue instanceof HTMLElement) {
@@ -1917,9 +1987,99 @@
       roomSlugInput.disabled = !integrationEnabled || isBusy;
     }
 
+    if (themeSelect instanceof HTMLSelectElement) {
+      const emptyLabel = !integrationEnabled
+        ? "Enable DDDice to choose a skin"
+        : !hasSession
+          ? "Connect guest or account to load skins"
+          : dddiceUiState.themeOptionsLoading
+            ? "Loading dice skins..."
+            : "No dice skins available";
+      const fragment = document.createDocumentFragment();
+
+      if (!themeOptions.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = emptyLabel;
+        option.selected = true;
+        fragment.appendChild(option);
+      } else {
+        themeOptions.forEach((theme) => {
+          const option = document.createElement("option");
+          option.value = theme.id;
+          option.textContent = theme.name;
+          option.selected = theme.id === selectedThemeId;
+          fragment.appendChild(option);
+        });
+      }
+
+      themeSelect.replaceChildren(fragment);
+      if (themeOptions.length) {
+        themeSelect.value = themeOptions.some((theme) => theme.id === selectedThemeId)
+          ? selectedThemeId
+          : themeOptions[0].id;
+      }
+      themeSelect.disabled =
+        !integrationEnabled ||
+        !hasSession ||
+        isBusy ||
+        dddiceUiState.themeOptionsLoading ||
+        !themeOptions.length;
+    }
+
+    if (themeHint instanceof HTMLElement) {
+      if (!integrationEnabled) {
+        themeHint.textContent =
+          "Enable DDDice dice replacement above to choose a DDDice skin.";
+      } else if (!hasSession) {
+        themeHint.textContent =
+          "Connect a guest session or link your DDDice account to load the skins available in that dice box.";
+      } else if (dddiceUiState.themeOptionsLoading) {
+        themeHint.textContent = "Loading available dice skins...";
+      } else if (!themeOptions.length) {
+        themeHint.textContent = "No DDDice dice skins are available for this user.";
+      } else if (themeOptions.length === 1) {
+        themeHint.textContent = `Using ${themeOptions[0].name}. Add more skins in DDDice to choose between them.`;
+      } else {
+        const selectedTheme =
+          themeOptions.find((theme) => theme.id === selectedThemeId) || themeOptions[0];
+        themeHint.textContent = `Selected skin: ${selectedTheme.name}.`;
+      }
+    }
+
+    if (accountActivation instanceof HTMLElement) {
+      accountActivation.hidden = !isAccountLinkPending;
+    }
+
+    if (activationCode instanceof HTMLElement) {
+      activationCode.textContent = String(dddiceUiState.accountActivationCode || "").trim() || "------";
+    }
+
+    if (activationCopy instanceof HTMLElement) {
+      const expiresAt = formatDddiceActivationExpiry(
+        dddiceUiState.accountActivationExpiresAt
+      );
+      activationCopy.textContent = isAccountLinkPending
+        ? expiresAt
+          ? `Open dddice.com/activate, sign in, and enter this code before ${expiresAt}.`
+          : "Open dddice.com/activate, sign in, and enter this code."
+        : "Open dddice.com/activate, sign in, and enter the code shown here.";
+    }
+
     if (connectButton instanceof HTMLButtonElement) {
       connectButton.disabled = !integrationEnabled || isBusy;
-      connectButton.textContent = hasSession ? "Refresh guest" : "Connect guest";
+      connectButton.textContent = isDddiceAccountSession()
+        ? "Switch to guest"
+        : hasSession
+          ? "Refresh guest"
+          : "Connect guest";
+    }
+
+    if (accountButton instanceof HTMLButtonElement) {
+      accountButton.disabled = !integrationEnabled || isBusy || isAccountLinkPending;
+      accountButton.textContent = isDddiceAccountSession()
+        ? "Reconnect account"
+        : "Connect account";
     }
 
     if (createRoomButton instanceof HTMLButtonElement) {
@@ -1933,6 +2093,14 @@
 
     if (view3dRoomButton instanceof HTMLButtonElement) {
       view3dRoomButton.disabled = !integrationEnabled || !hasActiveRoom;
+    }
+
+    if (openActivationButton instanceof HTMLButtonElement) {
+      openActivationButton.disabled = !isAccountLinkPending;
+    }
+
+    if (cancelActivationButton instanceof HTMLButtonElement) {
+      cancelActivationButton.disabled = !isAccountLinkPending;
     }
   }
 
@@ -2057,7 +2225,7 @@
     const themeId = String(dddiceUiState.themeId || "").trim();
 
     if (!token) {
-      throw new Error("Connect a guest session to start the 3D DDDice tray.");
+      throw new Error("Connect a DDDice guest or account session to start the 3D DDDice tray.");
     }
 
     if (!roomSlug) {
@@ -2248,7 +2416,7 @@
 
     const token = String(dddiceUiState.authToken || "").trim();
     if (!token) {
-      throw new Error("Connect a guest session before starting the room client.");
+      throw new Error("Connect a DDDice guest or account session before starting the room client.");
     }
 
     if (dddiceRuntimeState.engine && dddiceRuntimeState.engineToken === token) {
@@ -2316,18 +2484,21 @@
 
   function handleDddiceDraftInput(event) {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement)) {
+    if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLSelectElement)) {
       return;
     }
 
-    if (target.dataset.fbDddiceRole === "custom-roll-input") {
+    if (
+      target instanceof HTMLInputElement &&
+      target.dataset.fbDddiceRole === "custom-roll-input"
+    ) {
       const drawer = target.closest(".fb-dddice-drawer");
       syncDddiceDrawer(drawer instanceof HTMLElement ? drawer : getDddiceVisualizerHost());
       return;
     }
 
     const field = target.dataset.fbDddiceField;
-    if (field !== "draftRoomName" && field !== "draftRoomSlug") {
+    if (field !== "draftRoomName" && field !== "draftRoomSlug" && field !== "themeId") {
       return;
     }
 
@@ -2335,6 +2506,22 @@
       [field]: String(target.value || "").trim(),
     });
     void saveDddiceLocalState();
+
+    if (field === "themeId") {
+      setConfigStatus("Dice skin updated.", "ok");
+    }
+  }
+
+  function formatDddiceActivationExpiry(expiresAt) {
+    const expirationMs = Date.parse(String(expiresAt || ""));
+    if (!Number.isFinite(expirationMs)) {
+      return "";
+    }
+
+    return new Date(expirationMs).toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
   }
 
   function createDddiceSidebarAction() {
@@ -2561,6 +2748,45 @@
     throw new Error("DDDice did not return a guest token.");
   }
 
+  async function requestDddiceAccountActivation() {
+    const response = await dddiceApiRequest("/activate", {
+      method: "POST",
+    });
+    const code = String(response?.data?.code || "").trim();
+    const secret = String(response?.data?.secret || "").trim();
+    const expiresAt = String(response?.data?.expires_at || "").trim();
+
+    if (!code || !secret) {
+      throw new Error("DDDice did not return an account activation code.");
+    }
+
+    return {
+      code,
+      secret,
+      expiresAt,
+    };
+  }
+
+  function clearDddiceAccountActivation(nextState = {}) {
+    window.clearTimeout(dddiceRuntimeState.accountActivationPollTimeoutId);
+    dddiceRuntimeState.accountActivationPollTimeoutId = null;
+    dddiceRuntimeState.accountActivationSecret = "";
+
+    updateDddiceUiState({
+      accountActivationCode: "",
+      accountActivationExpiresAt: "",
+      accountActivationPending: false,
+      ...nextState,
+    });
+  }
+
+  function scheduleDddiceAccountActivationPoll(delayMs = 5000) {
+    window.clearTimeout(dddiceRuntimeState.accountActivationPollTimeoutId);
+    dddiceRuntimeState.accountActivationPollTimeoutId = window.setTimeout(() => {
+      void pollDddiceAccountActivation();
+    }, delayMs);
+  }
+
   async function fetchDddiceCurrentUser(token) {
     const response = await dddiceApiRequest("/user", {
       token,
@@ -2575,28 +2801,150 @@
     return Array.isArray(response?.data) ? response.data : [];
   }
 
-  async function ensureDddiceRollTheme(token, forceRefresh) {
-    if (dddiceUiState.themeId && !forceRefresh) {
-      return dddiceUiState.themeId;
+  function getDddiceThemeDisplayName(theme) {
+    const label = [
+      theme?.name,
+      theme?.theme?.name,
+      theme?.title,
+      theme?.theme?.title,
+      theme?.slug,
+      theme?.theme?.slug,
+      theme?.id,
+      theme?.theme?.id,
+    ].find((value) => typeof value === "string" && value.trim());
+
+    return String(label || "").trim();
+  }
+
+  function normalizeDddiceThemeOptions(diceBoxItems) {
+    const seenThemeIds = new Set();
+
+    return (Array.isArray(diceBoxItems) ? diceBoxItems : [])
+      .map((theme) => {
+        const id = String(theme?.id || theme?.theme?.id || "").trim();
+        const name = getDddiceThemeDisplayName(theme);
+
+        if (!id || !name || seenThemeIds.has(id)) {
+          return null;
+        }
+
+        seenThemeIds.add(id);
+        return { id, name };
+      })
+      .filter(Boolean);
+  }
+
+  async function ensureDddiceThemeOptions(token, forceRefresh) {
+    const authToken = String(token || dddiceUiState.authToken || "").trim();
+    const currentThemeId = String(dddiceUiState.themeId || "").trim();
+    const cachedThemes = Array.isArray(dddiceUiState.availableThemes)
+      ? dddiceUiState.availableThemes
+      : [];
+
+    if (!authToken) {
+      updateDddiceUiState({
+        availableThemes: [],
+        themeOptionsLoading: false,
+      });
+      return [];
     }
 
-    const diceBoxItems = await fetchDddiceDiceBox(token);
-    const themeId = String(diceBoxItems[0]?.id || "").trim();
+    if (
+      !forceRefresh &&
+      cachedThemes.length &&
+      cachedThemes.some((theme) => theme.id === currentThemeId)
+    ) {
+      return cachedThemes;
+    }
+
+    if (dddiceRuntimeState.themeOptionsPromise) {
+      return dddiceRuntimeState.themeOptionsPromise;
+    }
+
+    updateDddiceUiState({ themeOptionsLoading: true });
+
+    dddiceRuntimeState.themeOptionsPromise = fetchDddiceDiceBox(authToken)
+      .then(async (diceBoxItems) => {
+        const availableThemes = normalizeDddiceThemeOptions(diceBoxItems);
+        const nextThemeId = availableThemes.some((theme) => theme.id === currentThemeId)
+          ? currentThemeId
+          : String(availableThemes[0]?.id || "").trim();
+
+        updateDddiceUiState({
+          availableThemes,
+          themeId: nextThemeId,
+          themeOptionsLoading: false,
+        });
+
+        if (nextThemeId !== currentThemeId) {
+          await saveDddiceLocalState();
+        }
+
+        return availableThemes;
+      })
+      .catch((error) => {
+        updateDddiceUiState({ themeOptionsLoading: false });
+        throw error;
+      })
+      .finally(() => {
+        dddiceRuntimeState.themeOptionsPromise = null;
+      });
+
+    return dddiceRuntimeState.themeOptionsPromise;
+  }
+
+  async function hydrateDddiceSessionToken(token, authKind, forceRefresh, statusMessage = "") {
+    const normalizedAuthKind = normalizeDddiceAuthKind(authKind);
+    const user = await fetchDddiceCurrentUser(token);
+    const userName = String(user?.name || "").trim();
+    const userId = String(user?.uuid || "").trim();
+
+    updateDddiceUiState({
+      authKind: normalizedAuthKind,
+      authToken: token,
+      userName,
+      userId,
+      availableThemes: [],
+      themeOptionsLoading: false,
+    });
+
+    const themeId = await ensureDddiceRollTheme(token, forceRefresh);
+
+    updateDddiceUiState({
+      authKind: normalizedAuthKind,
+      authToken: token,
+      userName,
+      userId,
+      themeId,
+      connectionState: dddiceUiState.activeRoomSlug ? "connected" : "ready",
+      statusMessage,
+    });
+    await saveDddiceLocalState();
+    return token;
+  }
+
+  async function ensureDddiceRollTheme(token, forceRefresh) {
+    await ensureDddiceThemeOptions(token, forceRefresh);
+    const themeId = String(dddiceUiState.themeId || "").trim();
 
     if (!themeId) {
       throw new Error("No DDDice roll theme is available for this user.");
     }
 
-    updateDddiceUiState({ themeId });
-    await saveDddiceLocalState();
     return themeId;
   }
 
   async function ensureDddiceGuestSession(forceRefresh) {
     const existingToken = dddiceUiState.authToken;
     const hasCachedUser = !!(dddiceUiState.userName || dddiceUiState.userId);
+    const authKind = normalizeDddiceAuthKind(dddiceUiState.authKind);
 
-    if (existingToken && hasCachedUser && !!dddiceUiState.themeId && !forceRefresh) {
+    if (
+      existingToken &&
+      hasCachedUser &&
+      !!dddiceUiState.themeId &&
+      (!forceRefresh || authKind === "account")
+    ) {
       updateDddiceUiState({
         connectionState: getDddiceConnectionState(),
         statusMessage: "",
@@ -2607,28 +2955,55 @@
     updateDddiceUiState({
       connectionState: "connecting",
       statusMessage: existingToken
-        ? "Refreshing guest session..."
+        ? `Refreshing ${authKind} session...`
         : "Creating guest session...",
     });
 
     let token = existingToken;
-    let user = null;
 
     try {
-      if (!token) {
+      if (!token || (forceRefresh && authKind !== "account")) {
         token = await requestDddiceGuestToken();
       }
 
       try {
-        user = await fetchDddiceCurrentUser(token);
+        await hydrateDddiceSessionToken(
+          token,
+          authKind === "account" && token === existingToken ? "account" : "guest",
+          forceRefresh,
+          ""
+        );
       } catch (error) {
-        if (!existingToken) {
+        if (!existingToken || authKind === "account") {
           throw error;
         }
 
         token = await requestDddiceGuestToken();
-        user = await fetchDddiceCurrentUser(token);
+        await hydrateDddiceSessionToken(token, "guest", true, "");
       }
+    } catch (error) {
+      updateDddiceUiState({
+        connectionState: "error",
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : `Could not restore the DDDice ${authKind} session.`,
+      });
+      throw error;
+    }
+
+    return token;
+  }
+
+  async function connectDddiceGuestSession() {
+    clearDddiceAccountActivation({
+      connectionState: "connecting",
+      statusMessage: "Creating guest session...",
+    });
+
+    try {
+      const token = await requestDddiceGuestToken();
+      await hydrateDddiceSessionToken(token, "guest", true, "");
     } catch (error) {
       updateDddiceUiState({
         connectionState: "error",
@@ -2639,21 +3014,89 @@
       });
       throw error;
     }
-
-    updateDddiceUiState({
-      authToken: token,
-      userName: String(user?.name || "").trim(),
-      userId: String(user?.uuid || "").trim(),
-      themeId: await ensureDddiceRollTheme(token, forceRefresh),
-      connectionState: dddiceUiState.activeRoomSlug ? "connected" : "ready",
-      statusMessage: "",
-    });
-    await saveDddiceLocalState();
-    return token;
   }
 
-  async function connectDddiceGuestSession() {
-    await ensureDddiceGuestSession(true);
+  async function pollDddiceAccountActivation() {
+    const code = String(dddiceUiState.accountActivationCode || "").trim();
+    const secret = String(dddiceRuntimeState.accountActivationSecret || "").trim();
+    const expiresAt = String(dddiceUiState.accountActivationExpiresAt || "").trim();
+    const expirationMs = Date.parse(expiresAt);
+
+    if (!code || !secret) {
+      return;
+    }
+
+    if (Number.isFinite(expirationMs) && expirationMs <= Date.now()) {
+      clearDddiceAccountActivation({
+        connectionState: dddiceUiState.authToken ? getDddiceConnectionState() : "error",
+        statusMessage: "The DDDice account link code expired. Start a new account connection.",
+      });
+      return;
+    }
+
+    try {
+      const response = await dddiceApiRequest(
+        `/activate/${encodeURIComponent(code)}`,
+        {
+          headers: {
+            Authorization: `Secret ${secret}`,
+          },
+        }
+      );
+      const token = String(response?.data?.token || "").trim();
+
+      if (token) {
+        clearDddiceAccountActivation({
+          statusMessage: "Linking your DDDice account...",
+        });
+        await hydrateDddiceSessionToken(token, "account", true, "");
+        updateDddiceUiState({
+          statusMessage: dddiceUiState.userName
+            ? `Account linked as ${dddiceUiState.userName}.`
+            : "DDDice account linked.",
+        });
+        return;
+      }
+
+      scheduleDddiceAccountActivationPoll(5000);
+    } catch (error) {
+      clearDddiceAccountActivation({
+        connectionState: dddiceUiState.authToken ? getDddiceConnectionState() : "error",
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "Could not link the DDDice account.",
+      });
+    }
+  }
+
+  async function connectDddiceAccountSession() {
+    clearDddiceAccountActivation({
+      connectionState: dddiceUiState.authToken ? getDddiceConnectionState() : "idle",
+      statusMessage: "Requesting a DDDice account link code...",
+    });
+
+    try {
+      const activation = await requestDddiceAccountActivation();
+      dddiceRuntimeState.accountActivationSecret = activation.secret;
+      updateDddiceUiState({
+        accountActivationCode: activation.code,
+        accountActivationExpiresAt: activation.expiresAt,
+        accountActivationPending: true,
+        connectionState: dddiceUiState.authToken ? getDddiceConnectionState() : "idle",
+        statusMessage: `Open dddice.com/activate, sign in, and enter ${activation.code}.`,
+      });
+      scheduleDddiceAccountActivationPoll(1500);
+    } catch (error) {
+      updateDddiceUiState({
+        connectionState: dddiceUiState.authToken ? getDddiceConnectionState() : "error",
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "Could not start DDDice account linking.",
+      });
+      throw error;
+    }
   }
 
   async function createDddiceRoom() {
@@ -2996,6 +3439,24 @@
         return;
       }
 
+      if (action === "connect-account") {
+        await connectDddiceAccountSession();
+        return;
+      }
+
+      if (action === "open-account-activation") {
+        window.open(DDDICE_ACCOUNT_ACTIVATE_URL, "_blank", "noopener,noreferrer");
+        return;
+      }
+
+      if (action === "cancel-account-connect") {
+        clearDddiceAccountActivation({
+          connectionState: dddiceUiState.authToken ? getDddiceConnectionState() : "idle",
+          statusMessage: "",
+        });
+        return;
+      }
+
       if (action === "create-room") {
         await createDddiceRoom();
         return;
@@ -3124,7 +3585,7 @@
       </div>
       <div class="fb-dddice-drawer__summary">
         <span class="fb-dddice-drawer__user" hidden>
-          Guest <strong class="fb-dddice-drawer__user-value"></strong>
+          <span data-fb-dddice-role="user-kind">Guest</span> <strong class="fb-dddice-drawer__user-value"></strong>
         </span>
         <span class="fb-dddice-drawer__room" hidden>
           Room <strong class="fb-dddice-drawer__room-value"></strong>
@@ -3266,7 +3727,7 @@
       <div class="fb-dddice-drawer__summary">
         <span class="fb-dddice-drawer__state" data-state="idle">Guest mode</span>
         <span class="fb-dddice-drawer__user" hidden>
-          Guest <strong class="fb-dddice-drawer__user-value"></strong>
+          <span data-fb-dddice-role="user-kind">Guest</span> <strong class="fb-dddice-drawer__user-value"></strong>
         </span>
         <span class="fb-dddice-drawer__room" hidden>
           Room <strong class="fb-dddice-drawer__room-value"></strong>
@@ -3287,7 +3748,7 @@
           ></canvas>
           <div class="fb-dddice-drawer__roll-output" data-fb-dddice-role="roll-output" aria-live="polite" hidden></div>
           <p class="fb-dddice-drawer__hint fb-dddice-drawer__stage-copy" data-fb-dddice-role="canvas-status">
-            Connect a guest session to start the live dice tray.
+            Connect a DDDice guest or account session to start the live dice tray.
           </p>
         </div>
         <label class="fb-dddice-drawer__field">
@@ -3624,7 +4085,7 @@
           </div>
           <div class="fb-dddice-drawer__summary">
             <span class="fb-dddice-drawer__user" hidden>
-              Guest <strong class="fb-dddice-drawer__user-value"></strong>
+              <span data-fb-dddice-role="user-kind">Guest</span> <strong class="fb-dddice-drawer__user-value"></strong>
             </span>
             <span class="fb-dddice-drawer__room" hidden>
               Room <strong class="fb-dddice-drawer__room-value"></strong>
@@ -3638,6 +4099,13 @@
             Use D&amp;D Beyond's bottom-left dice button to open the DDDice custom roller.
           </p>
           <label class="fb-dddice-drawer__field">
+            <span class="fb-dddice-drawer__field-label">Dice skin</span>
+            <select class="fb-dddice-drawer__input" data-fb-dddice-field="themeId" aria-label="DDDice dice skin"></select>
+            <span class="fb-dddice-drawer__hint" data-fb-dddice-role="theme-hint">
+              Connect a guest session or link your DDDice account to load the skins available in that dice box.
+            </span>
+          </label>
+          <label class="fb-dddice-drawer__field">
             <span class="fb-dddice-drawer__field-label">Room name</span>
             <input class="fb-dddice-drawer__input" data-fb-dddice-field="draftRoomName" type="text" placeholder="Campaign Table" />
           </label>
@@ -3647,8 +4115,20 @@
           </label>
           <div class="fb-dddice-drawer__actions">
             <button type="button" data-fb-dddice-action="connect-guest">Connect guest</button>
+            <button type="button" data-fb-dddice-action="connect-account">Connect account</button>
             <button type="button" data-fb-dddice-action="create-room">Create room</button>
             <button type="button" data-fb-dddice-action="join-room">Join room</button>
+          </div>
+          <div class="fb-dddice-account-link" data-fb-dddice-role="account-activation" hidden>
+            <span class="fb-dddice-drawer__field-label">Account link code</span>
+            <strong class="fb-dddice-account-link__code" data-fb-dddice-role="activation-code">------</strong>
+            <p class="fb-dddice-drawer__hint" data-fb-dddice-role="activation-copy">
+              Open dddice.com/activate, sign in, and enter this code.
+            </p>
+            <div class="fb-dddice-drawer__actions fb-dddice-drawer__actions--secondary">
+              <button type="button" data-fb-dddice-action="open-account-activation">Open DDDice activate</button>
+              <button type="button" data-fb-dddice-action="cancel-account-connect">Cancel</button>
+            </div>
           </div>
           <div class="fb-dddice-drawer__actions fb-dddice-drawer__actions--secondary">
             <button type="button" data-fb-dddice-action="open-3d-room">View 3D room</button>
@@ -3661,6 +4141,7 @@
     modal.addEventListener("click", handleConfigModalClick);
     modal.addEventListener("keydown", handleConfigModalKeydown);
     modal.addEventListener("input", handleDddiceDraftInput);
+    modal.addEventListener("change", handleDddiceDraftInput);
     modal.addEventListener("click", handleDddiceActionClick);
     modal.querySelector(".fb-config-modal__form")?.addEventListener(
       "change",
@@ -3691,6 +4172,18 @@
     modal.hidden = false;
     document.body.classList.add("fb-config-modal-open");
     document.getElementById(CONFIG_TRIGGER_ID)?.setAttribute("aria-expanded", "true");
+
+    if (dddiceUiState.authToken) {
+      void ensureDddiceThemeOptions(dddiceUiState.authToken, true).catch((error) => {
+        console.error("[Further Beyond] Could not refresh DDDice dice skins.", error);
+        setConfigStatus(
+          error instanceof Error && error.message
+            ? error.message
+            : "Could not load DDDice dice skins.",
+          "error"
+        );
+      });
+    }
 
     window.requestAnimationFrame(() => {
       if (firstField instanceof HTMLElement) {
@@ -5544,6 +6037,7 @@
       window.removeEventListener("click", handleDddiceDiceButtonClick, true);
       window.removeEventListener("resize", scheduleDddiceDrawerPlacement);
       window.removeEventListener("scroll", scheduleDddiceDrawerPlacement);
+      window.clearTimeout(dddiceRuntimeState.accountActivationPollTimeoutId);
       window.clearTimeout(settingsStatusTimeoutId);
       window.clearTimeout(shortRestStatusTimeoutId);
     },
