@@ -292,82 +292,46 @@ body.fb-config-modal-open {
 .fb-dddice-screen-tray {
   position: fixed;
   inset: 0;
-  z-index: 2147483646;
-  display: grid;
-  place-items: center;
+  z-index: 2147483644;
   pointer-events: none;
+  overflow: hidden;
 }
 
 .fb-dddice-screen-tray[hidden] {
   display: none;
 }
 
-.fb-dddice-screen-tray__backdrop {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at center, rgba(255, 248, 236, 0.08), rgba(14, 19, 24, 0.28));
-  backdrop-filter: blur(3px);
-}
-
-.fb-dddice-screen-tray__panel {
-  position: relative;
-  width: min(680px, calc(100vw - 40px));
-  padding: 18px;
-  border: 1px solid rgba(18, 24, 28, 0.14);
-  border-top: 4px solid #c53131;
-  border-radius: 18px;
-  background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.72), transparent 34%),
-    linear-gradient(180deg, rgba(255, 252, 246, 0.95), rgba(241, 235, 226, 0.94));
-  box-shadow: 0 28px 72px rgba(18, 24, 28, 0.28);
-  pointer-events: auto;
-}
-
-.fb-dddice-screen-tray__close {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(18, 24, 28, 0.12);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #7f241d;
-  cursor: pointer;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
-}
-
 .fb-dddice-screen-tray__stage {
-  gap: 10px;
+  position: absolute;
+  left: var(--fb-dddice-screen-left, 0px);
+  top: var(--fb-dddice-screen-top, 0px);
+  width: var(--fb-dddice-screen-width, 100vw);
+  height: var(--fb-dddice-screen-height, 100vh);
+  display: block;
+  gap: 0;
 }
 
 .fb-dddice-screen-tray__canvas {
-  height: min(42vh, 360px);
-  border-radius: 16px;
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: none;
 }
 
 .fb-dddice-screen-tray__roll-output {
-  inset: 18px 18px 52px 18px;
-}
-
-.fb-dddice-screen-tray .fb-dddice-drawer__stage-copy {
-  text-align: center;
+  inset: auto 24px 24px 24px;
+  max-width: min(420px, calc(100% - 48px));
+  justify-items: end;
 }
 
 @media (max-width: 640px) {
-  .fb-dddice-screen-tray__panel {
-    width: calc(100vw - 20px);
-    padding: 14px;
-  }
-
-  .fb-dddice-screen-tray__canvas {
-    height: min(34vh, 260px);
-  }
-
   .fb-dddice-screen-tray__roll-output {
-    inset: 14px 14px 48px 14px;
+    inset: auto 14px 14px 14px;
+    max-width: calc(100% - 28px);
   }
 
   .fb-dddice-drawer[data-layout="roller"] {
@@ -990,6 +954,33 @@ body.fb-dddice-sidebar-layout .ct-sidebar__inner {
 
 .fb-dddice-drawer__stage[data-state="error"] .fb-dddice-drawer__canvas {
   border-color: rgba(184, 57, 43, 0.34);
+}
+
+.fb-dddice-screen-tray .fb-dddice-screen-tray__stage {
+  position: absolute;
+  left: var(--fb-dddice-screen-left, 0px);
+  top: var(--fb-dddice-screen-top, 0px);
+  width: var(--fb-dddice-screen-width, 100vw);
+  height: var(--fb-dddice-screen-height, 100vh);
+  display: block;
+  gap: 0;
+}
+
+.fb-dddice-screen-tray .fb-dddice-screen-tray__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  pointer-events: none;
+}
+
+.fb-dddice-screen-tray .fb-dddice-screen-tray__roll-output {
+  inset: auto 24px 24px 24px;
+  max-width: min(420px, calc(100% - 48px));
+  justify-items: end;
 }
 
 .fb-dddice-drawer__panel[hidden] {

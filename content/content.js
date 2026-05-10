@@ -23,6 +23,7 @@
   const DDDICE_SIDEBAR_LAYOUT_BODY_CLASS = "fb-dddice-sidebar-layout";
   const DDDICE_SIDEBAR_ACTION_CLASS = "fb-dddice-sidebar-action";
   const DDDICE_ROLL_HISTORY_LIMIT = 24;
+  const DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS = 2;
   const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
   const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
   const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
@@ -342,7 +343,7 @@
       return preferredHost;
     }
 
-    return getDddiceRollerPanel() || getDddiceDrawer();
+    return getDddiceScreenTray() || getDddiceRollerPanel() || getDddiceDrawer();
   }
 
   function getDddiceCanvas(host = getDddiceVisualizerHost()) {
@@ -365,6 +366,19 @@
     return sidebar instanceof HTMLElement ? sidebar : null;
   }
 
+  function getDddiceScreenTrayBoundsTarget() {
+    const selectors = [
+      ".ct-character-sheet",
+      ".ct-character-sheet__inner",
+      ".ct-character-sheet-desktop",
+      "main",
+    ];
+
+    return selectors
+      .map((selector) => document.querySelector(selector))
+      .find((element) => element instanceof HTMLElement && isElementVisible(element)) || null;
+  }
+
   function waitForNextAnimationFrame() {
     return new Promise((resolve) => {
       window.requestAnimationFrame(() => resolve());
@@ -381,6 +395,18 @@
 
     if (!allowOpen) {
       return null;
+    }
+
+    if (!getDddiceScreenTray()) {
+      mountDddiceScreenTray();
+      await waitForNextAnimationFrame();
+
+      host = getDddiceVisualizerHost();
+      canvas = getDddiceCanvas(host);
+
+      if (canvas instanceof HTMLCanvasElement && isElementVisible(canvas)) {
+        return host;
+      }
     }
 
     if (!dddiceUiState.expanded) {
@@ -1024,7 +1050,8 @@
     dddiceDrawerPlacementPending = true;
     window.requestAnimationFrame(() => {
       dddiceDrawerPlacementPending = false;
-      syncDddiceDrawerPlacement(getDddiceDrawer());
+      syncDddiceDrawerPlacement(getDddiceRollerPanel() || getDddiceDrawer());
+      syncDddiceScreenTray();
     });
   }
 
@@ -1525,7 +1552,7 @@
     output.dataset.animate = "true";
   }
 
-  function hideDddiceRollOutput(host = getDddiceDrawer()) {
+  function hideDddiceRollOutput(host = getDddiceVisualizerHost()) {
     const output = host?.querySelector('[data-fb-dddice-role="roll-output"]');
     if (!(output instanceof HTMLElement)) {
       return;
@@ -1535,10 +1562,36 @@
     output.removeAttribute("data-animate");
   }
 
-  function syncDddiceScreenTray(tray = getDddiceScreenTray()) {
-    if (tray instanceof HTMLElement) {
-      tray.remove();
+  function syncDddiceScreenTrayPlacement(tray = getDddiceScreenTray()) {
+    if (!(tray instanceof HTMLElement)) {
+      return;
     }
+
+    const target = getDddiceScreenTrayBoundsTarget();
+    const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null;
+
+    if (!rect || rect.width < 240 || rect.height < 240) {
+      tray.hidden = true;
+      tray.style.removeProperty("--fb-dddice-screen-left");
+      tray.style.removeProperty("--fb-dddice-screen-top");
+      tray.style.removeProperty("--fb-dddice-screen-width");
+      tray.style.removeProperty("--fb-dddice-screen-height");
+      return;
+    }
+
+    tray.hidden = false;
+    tray.style.setProperty("--fb-dddice-screen-left", `${Math.round(rect.left)}px`);
+    tray.style.setProperty("--fb-dddice-screen-top", `${Math.round(rect.top)}px`);
+    tray.style.setProperty("--fb-dddice-screen-width", `${Math.round(rect.width)}px`);
+    tray.style.setProperty("--fb-dddice-screen-height", `${Math.round(rect.height)}px`);
+  }
+
+  function syncDddiceScreenTray(tray = getDddiceScreenTray()) {
+    if (!(tray instanceof HTMLElement)) {
+      return;
+    }
+
+    syncDddiceScreenTrayPlacement(tray);
   }
 
   function hideDddiceScreenTray() {
@@ -1559,8 +1612,7 @@
   }
 
   function showDddiceScreenTray() {
-    removeDddiceScreenTray();
-    return null;
+    return mountDddiceScreenTray() ? getDddiceScreenTray() : null;
   }
 
   function syncDddiceStage(drawer, hasSdk, hasSession, hasRoom) {
@@ -1886,6 +1938,7 @@
 
   function updateDddiceUiState(nextState) {
     Object.assign(dddiceUiState, nextState);
+    mountDddiceScreenTray();
     mountDddiceNativePanel();
     mountDddiceRollerPanel();
     syncDddiceDrawer(getDddiceDrawer());
@@ -1932,12 +1985,20 @@
     const isRollerStage =
       stage instanceof HTMLElement &&
       stage.classList.contains("fb-dddice-drawer__stage--roller");
+    const isScreenTrayStage =
+      stage instanceof HTMLElement &&
+      stage.classList.contains("fb-dddice-screen-tray__stage");
     const width = Math.max(
       296,
       Math.round(stageRect?.width || canvasRect.width || canvas.clientWidth || canvas.width || 296)
     );
     const height = isRollerStage
       ? Math.max(360, width)
+      : isScreenTrayStage
+        ? Math.max(
+            240,
+            Math.round(stageRect?.height || canvasRect.height || canvas.clientHeight || canvas.height || 240)
+          )
       : Math.max(
           152,
           Math.round(canvasRect.height || canvas.clientHeight || canvas.height || 152)
@@ -1988,7 +2049,7 @@
 
     const canvas = getDddiceCanvas(drawer);
     if (!(canvas instanceof HTMLCanvasElement)) {
-      throw new Error("Open the DDDice roller to show the 3D tray.");
+      throw new Error("The DDDice screen overlay is unavailable on this sheet.");
     }
 
     const token = String(dddiceUiState.authToken || "").trim();
@@ -2009,7 +2070,7 @@
 
     if (canReuseDddiceVisualizer(drawer)) {
       if (dddiceRuntimeState.visualizer?.config) {
-        dddiceRuntimeState.visualizer.config.autoClear = 5;
+        dddiceRuntimeState.visualizer.config.autoClear = DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS;
       }
       resizeDddiceVisualizer(dddiceRuntimeState.visualizer, canvas);
       dddiceRuntimeState.visualizerError = "";
@@ -2019,7 +2080,7 @@
     destroyDddiceVisualizer();
 
     const visualizer = new sdk.ThreeDDice(canvas, token, {
-      autoClear: 5,
+      autoClear: DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS,
       bgColor: 0x000000,
       bgOpacity: 0,
       persistRolls: false,
@@ -2028,7 +2089,7 @@
 
     visualizer.api = visualizerApi;
     if (visualizer.config) {
-      visualizer.config.autoClear = 5;
+      visualizer.config.autoClear = DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS;
     }
     resizeDddiceVisualizer(visualizer, canvas);
     visualizer.start();
@@ -2363,7 +2424,7 @@
     try {
       await submitDddiceRollExpression(expression, label, {
         showRollerOutput: false,
-        show3dTray: false,
+        show3dTray: true,
       });
     } catch (error) {
       console.error("[Further Beyond] DDDice action failed.", error);
@@ -2408,7 +2469,7 @@
         rollDefinition.label,
         {
           showRollerOutput: false,
-          show3dTray: false,
+          show3dTray: true,
         }
       );
     } catch (error) {
@@ -3025,28 +3086,20 @@
     tray.id = DDDICE_SCREEN_TRAY_ID;
     tray.className = "fb-dddice-screen-tray";
     tray.hidden = true;
-    tray.setAttribute("aria-label", "DDDice tray");
+    tray.setAttribute("aria-hidden", "true");
     tray.innerHTML = `
-      <div class="fb-dddice-screen-tray__backdrop"></div>
-      <div class="fb-dddice-screen-tray__panel">
-        <button type="button" class="fb-dddice-screen-tray__close" data-fb-dddice-action="close-screen-tray" aria-label="Close DDDice tray">x</button>
-        <div class="fb-dddice-drawer__stage fb-dddice-screen-tray__stage" data-state="idle">
-          <canvas
-            class="fb-dddice-drawer__canvas fb-dddice-screen-tray__canvas"
-            data-fb-dddice-role="canvas"
-            width="560"
-            height="320"
-            aria-label="DDDice tray"
-          ></canvas>
-          <div class="fb-dddice-drawer__roll-output fb-dddice-screen-tray__roll-output" data-fb-dddice-role="roll-output" aria-live="polite" hidden></div>
-          <p class="fb-dddice-drawer__hint fb-dddice-drawer__stage-copy" data-fb-dddice-role="canvas-status">
-            Connect a guest session from Further Beyond settings to start the 3D DDDice tray.
-          </p>
-        </div>
+      <div class="fb-dddice-drawer__stage fb-dddice-screen-tray__stage" data-state="idle">
+        <canvas
+          class="fb-dddice-drawer__canvas fb-dddice-screen-tray__canvas"
+          data-fb-dddice-role="canvas"
+          width="1280"
+          height="720"
+          aria-label="DDDice tray"
+        ></canvas>
+        <div class="fb-dddice-drawer__roll-output fb-dddice-screen-tray__roll-output" data-fb-dddice-role="roll-output" aria-live="polite" hidden></div>
       </div>
     `;
 
-    tray.addEventListener("click", handleDddiceActionClick);
     syncDddiceScreenTray(tray);
     return tray;
   }
@@ -3082,19 +3135,6 @@
           <span class="fb-dddice-drawer__status-label">Status</span>
           <span class="fb-dddice-drawer__status-copy">Guest setup has not started yet.</span>
         </p>
-        <div class="fb-dddice-drawer__stage fb-dddice-drawer__stage--roller" data-state="idle">
-          <canvas
-            class="fb-dddice-drawer__canvas"
-            data-fb-dddice-role="canvas"
-            width="420"
-            height="420"
-            aria-label="DDDice tray"
-          ></canvas>
-          <div class="fb-dddice-drawer__roll-output" data-fb-dddice-role="roll-output" aria-live="polite" hidden></div>
-          <p class="fb-dddice-drawer__hint fb-dddice-drawer__stage-copy" data-fb-dddice-role="canvas-status">
-            Connect a guest session from Further Beyond settings to start the 3D DDDice tray.
-          </p>
-        </div>
         <label class="fb-dddice-drawer__field">
           <span class="fb-dddice-drawer__field-label">Custom roll</span>
           <input class="fb-dddice-drawer__input" data-fb-dddice-role="custom-roll-input" type="text" placeholder="d20 + 2d6" />
@@ -3137,8 +3177,22 @@
   }
 
   function mountDddiceScreenTray() {
-    removeDddiceScreenTray();
-    return false;
+    if (!getExtensionSettings().dddiceEnabled) {
+      removeDddiceScreenTray();
+      return false;
+    }
+
+    let tray = getDddiceScreenTray();
+    if (!(tray instanceof HTMLElement)) {
+      tray = createDddiceScreenTray();
+    }
+
+    if (tray.parentElement !== document.body) {
+      document.body.appendChild(tray);
+    }
+
+    syncDddiceScreenTray(tray);
+    return true;
   }
 
   function mountDddiceNativePanel() {
@@ -3284,7 +3338,6 @@
 
   function mountDddiceDrawer() {
     getDddiceDrawerDock()?.remove();
-    removeDddiceScreenTray();
     resetDddiceSidebarLayout();
 
     if (!getExtensionSettings().dddiceEnabled) {
@@ -5419,8 +5472,8 @@
     mountIndicator();
     await ensureExtensionSettingsLoaded();
     await ensureDddiceLocalStateLoaded();
-    mountDddiceDrawer();
     mountDddiceScreenTray();
+    mountDddiceDrawer();
     syncDddiceSidebarAction(findDddiceInfoSidebar());
     mountConfigTrigger();
     await mountShortRestUseHitDieAction();
