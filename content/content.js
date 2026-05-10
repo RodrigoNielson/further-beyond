@@ -152,9 +152,12 @@
     visualizerRoomSlug: "",
     visualizerThemeId: "",
     visualizerError: "",
+    visualizerWarmupTimerId: null,
+    visualizerWarmupActive: false,
     themeOptionsPromise: null,
     accountActivationSecret: "",
     accountActivationPollTimeoutId: null,
+    suppressedRolls: [],
   };
 
   let refreshPending = false;
@@ -2112,6 +2115,267 @@
     syncDddiceDrawer(getDddiceDrawer());
     syncDddiceConfigPanel();
     syncDddiceSidebarAction(findDddiceInfoSidebar());
+
+    if (
+      String(dddiceUiState.authToken || "").trim() &&
+      normalizeDddiceRoomSlug(dddiceUiState.activeRoomSlug) &&
+      String(dddiceUiState.themeId || "").trim()
+    ) {
+      scheduleDddiceVisualizerWarmup(getDddiceScreenTray());
+    }
+  }
+
+  function createDddicePreviewUuid() {
+    if (typeof globalThis.crypto?.randomUUID === "function") {
+      return globalThis.crypto.randomUUID();
+    }
+
+    return `fb-dddice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function getDddiceRollValueSignature(rollValue) {
+    if (!rollValue || typeof rollValue !== "object") {
+      return "";
+    }
+
+    return [
+      String(rollValue.type || "").trim(),
+      String(rollValue.theme || "").trim(),
+      Number.isFinite(Number(rollValue.value)) ? String(Number(rollValue.value)) : "",
+      String(rollValue.value_to_display ?? "").trim(),
+      rollValue.is_hidden ? "1" : "0",
+      rollValue.is_dropped ? "1" : "0",
+    ].join(":");
+  }
+
+  function getDddiceRollSignature(roll) {
+    if (!roll || typeof roll !== "object") {
+      return "";
+    }
+
+    const valuesSignature = Array.isArray(roll.values)
+      ? roll.values.map(getDddiceRollValueSignature).join("|")
+      : "";
+
+    return [
+      String(roll.equation || "").trim(),
+      String(roll.user?.uuid || "").trim(),
+      valuesSignature,
+    ].join("::");
+  }
+
+  function pruneSuppressedDddiceRolls(now = Date.now()) {
+    dddiceRuntimeState.suppressedRolls = dddiceRuntimeState.suppressedRolls.filter(
+      (entry) => entry.expiresAt > now
+    );
+  }
+
+  function queueSuppressedDddiceRoll(roll, lifetimeMs = 5000) {
+    const signature = getDddiceRollSignature(roll);
+    if (!signature) {
+      return;
+    }
+
+    pruneSuppressedDddiceRolls();
+    dddiceRuntimeState.suppressedRolls.push({
+      signature,
+      expiresAt: Date.now() + lifetimeMs,
+    });
+  }
+
+  function unqueueSuppressedDddiceRoll(roll) {
+    const signature = getDddiceRollSignature(roll);
+    if (!signature) {
+      return;
+    }
+
+    dddiceRuntimeState.suppressedRolls = dddiceRuntimeState.suppressedRolls.filter(
+      (entry) => entry.signature !== signature
+    );
+  }
+
+  function shouldSuppressDddiceRollEvent(roll) {
+    const signature = getDddiceRollSignature(roll);
+    if (!signature) {
+      return false;
+    }
+
+    pruneSuppressedDddiceRolls();
+
+    const entryIndex = dddiceRuntimeState.suppressedRolls.findIndex(
+      (entry) => entry.signature === signature
+    );
+    if (entryIndex < 0) {
+      return false;
+    }
+
+    dddiceRuntimeState.suppressedRolls.splice(entryIndex, 1);
+    return true;
+  }
+
+  function installDddiceVisualizerEventFilter(visualizer) {
+    if (!visualizer || visualizer.__fbRollFilterInstalled) {
+      return;
+    }
+
+    const originalEventRollCreated = visualizer.eventRollCreated;
+    if (typeof originalEventRollCreated === "function") {
+      visualizer.eventRollCreated = (roll, addedDice = []) => {
+        if (shouldSuppressDddiceRollEvent(roll)) {
+          return;
+        }
+
+        return originalEventRollCreated.call(visualizer, roll, addedDice);
+      };
+    }
+
+    visualizer.__fbRollFilterInstalled = true;
+  }
+
+  function createDddiceImmediateRoll(visualizer, parsedRoll, label) {
+    if (!visualizer || typeof visualizer.getThemeOptions !== "function") {
+      throw new Error("The DDDice 3D renderer is unavailable.");
+    }
+
+    const now = new Date().toISOString();
+    const userUuid = String(dddiceUiState.userId || "local-user").trim() || "local-user";
+    const userName = String(dddiceUiState.userName || "Player 1").trim() || "Player 1";
+    const themeCache = new Map();
+    const values = [];
+
+    for (const die of Array.isArray(parsedRoll?.dice) ? parsedRoll.dice : []) {
+      const type = String(die?.type || "").trim();
+      if (!type) {
+        continue;
+      }
+
+      if (type === "mod") {
+        const modifierValue = Number(die?.value ?? die?.value_to_display ?? 0);
+        values.push({
+          uuid: createDddicePreviewUuid(),
+          is_hidden: false,
+          is_user_value: true,
+          is_visible: true,
+          is_cleared: false,
+          is_dropped: false,
+          type: "mod",
+          theme: null,
+          value: Number.isFinite(modifierValue) ? modifierValue : 0,
+          value_to_display: String(
+            die?.value_to_display ??
+              (Number.isFinite(modifierValue) ? modifierValue : 0)
+          ),
+          created_at: now,
+          updated_at: now,
+        });
+        continue;
+      }
+
+      const themeId = String(die?.theme || dddiceUiState.themeId || "").trim();
+      if (!themeId) {
+        throw new Error("No DDDice roll theme is available for this user.");
+      }
+
+      let themeOptions = themeCache.get(themeId);
+      if (!themeOptions) {
+        themeOptions = visualizer.getThemeOptions(themeId);
+        themeCache.set(themeId, themeOptions);
+      }
+
+      const availableValues = Array.isArray(themeOptions?.values?.[type])
+        ? themeOptions.values[type]
+        : [];
+      if (!availableValues.length) {
+        throw new Error(`Theme ${themeId} is missing a ${type}.`);
+      }
+
+      const valueIndex = Math.floor(Math.random() * availableValues.length);
+      const displayValue = availableValues[valueIndex];
+      const numericValue = Number.parseInt(String(displayValue), 10);
+
+      values.push({
+        uuid: createDddicePreviewUuid(),
+        is_hidden: !!die?.is_hidden,
+        is_user_value: true,
+        is_visible: !die?.is_hidden,
+        is_cleared: false,
+        is_dropped: false,
+        type,
+        theme: themeId,
+        value: Number.isFinite(numericValue) ? numericValue : valueIndex + 1,
+        value_to_display: String(displayValue),
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    const totalValue = values.reduce((sum, value) => {
+      if (value.is_dropped) {
+        return sum;
+      }
+
+      const parsedValue = Number.parseFloat(
+        String(value.value_to_display ?? value.value ?? 0)
+      );
+      return Number.isFinite(parsedValue) ? sum + parsedValue : sum;
+    }, 0);
+
+    return {
+      uuid: createDddicePreviewUuid(),
+      label,
+      equation: String(parsedRoll?.equation || "").trim(),
+      direction: 0,
+      total_value: totalValue,
+      values,
+      velocity: 10,
+      operator: parsedRoll?.operator,
+      whisper: [],
+      created_at: now,
+      updated_at: now,
+      user: {
+        uuid: userUuid,
+        name: userName,
+        username: userName,
+      },
+      room: {
+        slug: normalizeDddiceRoomSlug(dddiceUiState.activeRoomSlug),
+        name: String(dddiceUiState.activeRoomName || "").trim(),
+        participants: [
+          {
+            username: userName,
+            color: "#ccc4e3",
+            user: {
+              uuid: userUuid,
+              name: userName,
+              username: userName,
+            },
+          },
+        ],
+      },
+    };
+  }
+
+  function applyDddiceRollTheme(parsedRoll, themeId) {
+    const normalizedThemeId = String(themeId || "").trim();
+    if (!parsedRoll || typeof parsedRoll !== "object" || !normalizedThemeId) {
+      return parsedRoll;
+    }
+
+    return {
+      ...parsedRoll,
+      dice: Array.isArray(parsedRoll.dice)
+        ? parsedRoll.dice.map((die) => {
+            if (!die || typeof die !== "object" || die.type === "mod") {
+              return die;
+            }
+
+            return {
+              ...die,
+              theme: normalizedThemeId,
+            };
+          })
+        : [],
+    };
   }
 
   function getDddiceVisualizerErrorMessage(error) {
@@ -2202,7 +2466,10 @@
     canvas.style.removeProperty("height");
   }
 
-  async function ensureDddiceVisualizer(drawer = getDddiceVisualizerHost()) {
+  async function ensureDddiceVisualizer(
+    drawer = getDddiceVisualizerHost(),
+    options = {}
+  ) {
     const sdk = getDddiceSdk();
     if (!sdk || typeof sdk.ThreeDDice !== "function") {
       throw new Error("The local DDDice 3D renderer is unavailable.");
@@ -2236,7 +2503,18 @@
       throw new Error("No DDDice theme is available for this user.");
     }
 
+    while (
+      options.skipWarmupWait !== true &&
+      !dddiceRuntimeState.visualizer &&
+      dddiceRuntimeState.visualizerWarmupActive
+    ) {
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 50);
+      });
+    }
+
     if (canReuseDddiceVisualizer(drawer)) {
+      installDddiceVisualizerEventFilter(dddiceRuntimeState.visualizer);
       if (dddiceRuntimeState.visualizer?.config) {
         dddiceRuntimeState.visualizer.config.autoClear = DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS;
       }
@@ -2256,6 +2534,7 @@
     const visualizerApi = visualizer.api || new sdk.ThreeDDiceAPI(token);
 
     visualizer.api = visualizerApi;
+    installDddiceVisualizerEventFilter(visualizer);
     if (visualizer.config) {
       visualizer.config.autoClear = DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS;
     }
@@ -2281,7 +2560,61 @@
     return visualizer;
   }
 
+  function scheduleDddiceVisualizerWarmup(drawer = getDddiceVisualizerHost()) {
+    if (
+      !(drawer instanceof HTMLElement) ||
+      dddiceRuntimeState.visualizer ||
+      dddiceRuntimeState.visualizerWarmupActive
+    ) {
+      return;
+    }
+
+    dddiceRuntimeState.visualizerWarmupActive = true;
+
+    void Promise.resolve()
+      .then(async () => {
+        const token = String(dddiceUiState.authToken || "").trim();
+        if (!token) {
+          return;
+        }
+
+        await ensureDddiceRollTheme(token, false);
+
+        const host = getDddiceVisualizerHost(drawer);
+        if (!(host instanceof HTMLElement) || dddiceRuntimeState.visualizer) {
+          return;
+        }
+
+        await ensureDddiceVisualizer(host, { skipWarmupWait: true });
+      })
+      .catch(() => {
+        // Keep warmup silent. The explicit roll path still surfaces actionable errors.
+      })
+      .finally(() => {
+        dddiceRuntimeState.visualizerWarmupActive = false;
+      });
+  }
+
+  async function ensureDddiceThemeResourcesLoaded(visualizer, themeId) {
+    if (!visualizer || typeof visualizer.loadThemeResources !== "function") {
+      return;
+    }
+
+    let pendingResources = visualizer.loadThemeResources(themeId, true);
+    while (pendingResources.length > 0) {
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 100);
+      });
+      pendingResources = visualizer.loadThemeResources(themeId, false);
+    }
+  }
+
   function destroyDddiceVisualizer(errorMessage = "") {
+    if (dddiceRuntimeState.visualizerWarmupTimerId !== null) {
+      window.clearTimeout(dddiceRuntimeState.visualizerWarmupTimerId);
+      dddiceRuntimeState.visualizerWarmupTimerId = null;
+    }
+
     const visualizer = dddiceRuntimeState.visualizer;
     if (visualizer) {
       try {
@@ -2311,6 +2644,10 @@
     const hasTheme = !!String(dddiceUiState.themeId || "").trim();
 
     if (!(drawer instanceof HTMLElement)) {
+      if (dddiceRuntimeState.visualizerWarmupTimerId !== null) {
+        window.clearTimeout(dddiceRuntimeState.visualizerWarmupTimerId);
+        dddiceRuntimeState.visualizerWarmupTimerId = null;
+      }
       if (dddiceRuntimeState.visualizer) {
         destroyDddiceVisualizer();
       }
@@ -2318,6 +2655,10 @@
     }
 
     if (!hasSession || !hasRoom || !hasTheme) {
+      if (dddiceRuntimeState.visualizerWarmupTimerId !== null) {
+        window.clearTimeout(dddiceRuntimeState.visualizerWarmupTimerId);
+        dddiceRuntimeState.visualizerWarmupTimerId = null;
+      }
       if (dddiceRuntimeState.visualizer) {
         destroyDddiceVisualizer();
       } else {
@@ -2329,6 +2670,10 @@
 
     const canvas = getDddiceCanvas(drawer);
     if (!(canvas instanceof HTMLCanvasElement)) {
+      if (dddiceRuntimeState.visualizerWarmupTimerId !== null) {
+        window.clearTimeout(dddiceRuntimeState.visualizerWarmupTimerId);
+        dddiceRuntimeState.visualizerWarmupTimerId = null;
+      }
       if (dddiceRuntimeState.visualizer) {
         destroyDddiceVisualizer();
       }
@@ -2337,6 +2682,7 @@
     }
 
     if (!dddiceRuntimeState.visualizer) {
+      scheduleDddiceVisualizerWarmup(drawer);
       syncDddiceStage(drawer, hasSdk, hasSession, hasRoom);
       return;
     }
@@ -3322,26 +3668,64 @@
       let response = null;
       let usedVisualizerRoll = false;
       const tray = await ensureDddiceVisualizerHostVisible(show3dTray);
+      let immediateRoll = null;
+      let rollPayload = parsedRoll;
 
       if (tray instanceof HTMLElement) {
-        await waitForNextAnimationFrame();
-
         try {
           const visualizer = await ensureDddiceVisualizer(tray);
-          if (typeof visualizer.roll === "function") {
-            response = await visualizer.roll(parsedRoll.dice, rollOptions);
-            usedVisualizerRoll = true;
-            hideDddiceRollOutput(tray);
-            dddiceRuntimeState.visualizerError = "";
+          rollPayload = applyDddiceRollTheme(
+            parsedRoll,
+            dddiceRuntimeState.visualizerThemeId || dddiceUiState.themeId
+          );
+          immediateRoll = createDddiceImmediateRoll(visualizer, rollPayload, label);
+          const rollCreatedEvent = getDddiceSdk()?.ThreeDDiceRollEvent?.RollCreated;
+
+          if (!rollCreatedEvent) {
+            throw new Error("The local DDDice roll event bridge is unavailable.");
           }
+
+          visualizer.dispatch(rollCreatedEvent, immediateRoll);
+          queueSuppressedDddiceRoll(immediateRoll);
+          hideDddiceRollOutput(tray);
+          dddiceRuntimeState.visualizerError = "";
+
+          const engine = ensureDddiceEngine();
+          response = await engine.roll.create(immediateRoll.values, rollOptions);
+          if (response?.data) {
+            response.data.label = label;
+          }
+          if (!response?.data?.equation) {
+            response.data.equation = rollPayload.equation;
+          }
+          if (!response?.data?.operator && rollPayload.operator) {
+            response.data.operator = rollPayload.operator;
+          }
+
+          if (
+            response?.data &&
+            Array.isArray(response.data.values) &&
+            response.data.values.length === immediateRoll.values.length
+          ) {
+            response.data.values = response.data.values.map((value, index) => ({
+              ...value,
+              value_to_display:
+                immediateRoll.values[index]?.value_to_display ?? value.value_to_display,
+            }));
+          }
+
+            usedVisualizerRoll = true;
         } catch (error) {
+          if (immediateRoll) {
+            unqueueSuppressedDddiceRoll(immediateRoll);
+          }
           console.warn("[Further Beyond] Falling back to API roll after tray roll failed.", error);
         }
       }
 
       if (!response) {
         const engine = ensureDddiceEngine();
-        response = await engine.roll.create(parsedRoll.dice, rollOptions);
+        response = await engine.roll.create(rollPayload.dice, rollOptions);
       }
 
       const roll = response?.data || null;
@@ -5967,6 +6351,13 @@
     await ensureDddiceLocalStateLoaded();
     mountDddiceScreenTray();
     mountDddiceDrawer();
+    if (
+      String(dddiceUiState.authToken || "").trim() &&
+      normalizeDddiceRoomSlug(dddiceUiState.activeRoomSlug) &&
+      String(dddiceUiState.themeId || "").trim()
+    ) {
+      scheduleDddiceVisualizerWarmup(getDddiceScreenTray());
+    }
     syncDddiceSidebarAction(findDddiceInfoSidebar());
     mountConfigTrigger();
     await mountShortRestUseHitDieAction();
