@@ -9,6 +9,8 @@
 
   const REQUEST_EVENT = "fb:inventory-request";
   const RESPONSE_EVENT = "fb:inventory-response";
+  const INTEGRATED_DICE_REQUEST_EVENT = "fb:integrated-dice-request";
+  const INTEGRATED_DICE_RESPONSE_EVENT = "fb:integrated-dice-response";
   const SHORT_REST_REQUEST_EVENT = "fb:short-rest-request";
   const SHORT_REST_RESPONSE_EVENT = "fb:short-rest-response";
   const SHORT_REST_STORAGE_KEY_PREFIX = "fb:used-hit-dice:";
@@ -25,6 +27,12 @@
     dispatchHookInstalled: false,
   };
   const COIN_KEYS = ["cp", "sp", "ep", "gp", "pp"];
+
+  function normalizeText(value) {
+    return String(value || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
 
   function getWebpackRequire() {
     if (bridgeState.requireFn) {
@@ -255,6 +263,53 @@
 
     const fiberKey = Object.keys(element).find((key) => key.startsWith("__reactFiber$"));
     return fiberKey ? element[fiberKey] : null;
+  }
+
+  function getIntegratedDiceMetadata(targetToken) {
+    const token = String(targetToken || "").trim();
+    if (!token) {
+      return null;
+    }
+
+    const button = document.querySelector(
+      `[data-fb-dddice-target="${token}"]`
+    );
+    if (!(button instanceof HTMLButtonElement)) {
+      return null;
+    }
+
+    let currentFiber = findReactFiber(button);
+    while (currentFiber) {
+      const childProps = currentFiber.memoizedProps?.children?.props;
+      if (childProps && typeof childProps === "object") {
+        if (typeof childProps.damage === "string") {
+          return {
+            kind: "damage",
+            expression: normalizeText(childProps.damage).replace(/\s+/g, ""),
+            damageType: normalizeText(childProps.type),
+          };
+        }
+
+        if (Number.isFinite(childProps.number)) {
+          return {
+            kind: "modifier",
+            modifier: childProps.number,
+          };
+        }
+      }
+
+      currentFiber = currentFiber.return;
+    }
+
+    const expression = normalizeText(button.textContent).replace(/\s+/g, "");
+    if (!expression) {
+      return null;
+    }
+
+    return {
+      kind: "text",
+      expression,
+    };
   }
 
   function findShortRestInstance() {
@@ -608,6 +663,17 @@
     );
   }
 
+  function dispatchIntegratedDiceResponse(requestId, detail) {
+    window.dispatchEvent(
+      new CustomEvent(INTEGRATED_DICE_RESPONSE_EVENT, {
+        detail: {
+          requestId,
+          ...detail,
+        },
+      })
+    );
+  }
+
   window.addEventListener(REQUEST_EVENT, (event) => {
     const detail = event.detail || {};
     if (!detail.requestId) {
@@ -658,6 +724,25 @@
         });
     } catch (error) {
       dispatchShortRestResponse(detail.requestId, {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  window.addEventListener(INTEGRATED_DICE_REQUEST_EVENT, (event) => {
+    const detail = event.detail || {};
+    if (!detail.requestId) {
+      return;
+    }
+
+    try {
+      dispatchIntegratedDiceResponse(detail.requestId, {
+        ok: true,
+        metadata: getIntegratedDiceMetadata(detail.targetToken),
+      });
+    } catch (error) {
+      dispatchIntegratedDiceResponse(detail.requestId, {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       });

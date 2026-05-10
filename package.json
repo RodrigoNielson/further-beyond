@@ -1,0 +1,13 @@
+{
+  "name": "further-beyond",
+  "private": true,
+  "scripts": {
+    "build:sdk": "esbuild src/dddice-sdk.js --bundle --format=iife --target=chrome120 --outfile=content/dddice-sdk.js"
+  },
+  "dependencies": {
+    "dddice-js": "^0.20.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.4"
+  }
+}

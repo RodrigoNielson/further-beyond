@@ -15,13 +15,24 @@
   const SPEED_WARNING_ID = "fb-speed-warning";
   const CONFIG_TRIGGER_ID = "fb-config-trigger";
   const CONFIG_MODAL_ID = "fb-config-modal";
+  const DDDICE_DRAWER_ID = "fb-dddice-drawer";
+  const DDDICE_NATIVE_PANEL_ID = "fb-dddice-native-panel";
+  const DDDICE_ROLLER_PANEL_ID = "fb-dddice-roller-panel";
+  const DDDICE_DRAWER_DOCK_CLASS = "fb-dddice-dock";
+  const DDDICE_SIDEBAR_LAYOUT_BODY_CLASS = "fb-dddice-sidebar-layout";
+  const DDDICE_SIDEBAR_ACTION_CLASS = "fb-dddice-sidebar-action";
+  const DDDICE_ROLL_HISTORY_LIMIT = 24;
   const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
   const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
   const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
+  const INTEGRATED_DICE_REQUEST_EVENT = "fb:integrated-dice-request";
+  const INTEGRATED_DICE_RESPONSE_EVENT = "fb:integrated-dice-response";
   const SHORT_REST_REQUEST_EVENT = "fb:short-rest-request";
   const SHORT_REST_RESPONSE_EVENT = "fb:short-rest-response";
   const IGNORE_WEIGHT_STORAGE_KEY_PREFIX = "fb:ignored-weight:";
   const EXTENSION_SETTINGS_STORAGE_KEY = "fb:settings";
+  const DDDICE_LOCAL_STATE_STORAGE_KEY = "fb:dddice:local-state";
+  const DDDICE_API_BASE_URL = "https://dddice.com/api/1.0";
   const SHORT_REST_ACTION_CLASS = "fb-short-rest-action";
   const SHORT_REST_USE_BUTTON_CLASS = "fb-short-rest-use-hit-die";
   const SHORT_REST_STATUS_CLASS = "fb-short-rest-status";
@@ -35,11 +46,41 @@
     coinsHaveWeight: true,
     coinsPerSlot: 250,
     shortRestHitDiceEnabled: true,
+    dddiceEnabled: false,
+    dddiceSuppressNativeDice: true,
   });
   const HEADING_SELECTORS = [
     "main .ddbc-character-tidbits__heading h1",
     "main h1.styles_characterName__2x8wQ",
     "main h1",
+  ];
+  const DDDICE_SKILL_NAMES = [
+    "Acrobatics",
+    "Animal Handling",
+    "Arcana",
+    "Athletics",
+    "Deception",
+    "History",
+    "Insight",
+    "Intimidation",
+    "Investigation",
+    "Medicine",
+    "Nature",
+    "Perception",
+    "Performance",
+    "Persuasion",
+    "Religion",
+    "Sleight of Hand",
+    "Stealth",
+    "Survival",
+  ];
+  const DDDICE_ABILITY_NAMES = [
+    "Strength",
+    "Dexterity",
+    "Constitution",
+    "Intelligence",
+    "Wisdom",
+    "Charisma",
   ];
   const inventorySnapshot = {
     characterKey: getCharacterKey(),
@@ -58,6 +99,8 @@
     listenerBound: false,
     pendingRequests: new Map(),
     activeInventoryPromise: null,
+    integratedDiceListenerBound: false,
+    pendingIntegratedDiceRequests: new Map(),
     shortRestListenerBound: false,
     pendingShortRestRequests: new Map(),
     activeShortRestPromise: null,
@@ -73,8 +116,36 @@
     pendingUsage: {},
     dirty: false,
   };
+  const dddiceUiState = {
+    loaded: false,
+    loadPromise: null,
+    expanded: false,
+    connectionState: "idle",
+    draftRoomSlug: "",
+    draftRoomName: "",
+    activeRoomSlug: "",
+    activeRoomName: "",
+    authToken: "",
+    userName: "",
+    userId: "",
+    themeId: "",
+    statusMessage: "",
+    rollHistory: [],
+  };
+  const dddiceRuntimeState = {
+    engine: null,
+    engineToken: "",
+    connectedRoomSlug: "",
+    syncPending: false,
+    visualizer: null,
+    visualizerToken: "",
+    visualizerRoomSlug: "",
+    visualizerThemeId: "",
+    visualizerError: "",
+  };
 
   let refreshPending = false;
+  let dddiceDrawerPlacementPending = false;
   let settingsStatusTimeoutId = null;
   let shortRestStatusTimeoutId = null;
 
@@ -212,6 +283,2562 @@
     return document.getElementById(CONFIG_MODAL_ID);
   }
 
+  function getDddiceDrawer() {
+    return getDddiceRollerPanel() || document.getElementById(DDDICE_DRAWER_ID);
+  }
+
+  function getDddiceNativePanel() {
+    return document.getElementById(DDDICE_NATIVE_PANEL_ID);
+  }
+
+  function getDddiceRollerPanel() {
+    return document.getElementById(DDDICE_ROLLER_PANEL_ID);
+  }
+
+  function getDddiceConfigPanel() {
+    const panel = getConfigModal()?.querySelector('[data-fb-dddice-role="config-panel"]');
+    return panel instanceof HTMLElement ? panel : null;
+  }
+
+  function getDddiceDiceButton() {
+    return (
+      Array.from(
+        document.querySelectorAll('.dice-rolling-panel button[class*="DiceContainer_button__"]')
+      ).find((element) => element instanceof HTMLButtonElement && isElementVisible(element)) ||
+      null
+    );
+  }
+
+  function getDddiceDrawerDock() {
+    return document.querySelector(`.${DDDICE_DRAWER_DOCK_CLASS}`);
+  }
+
+  function unwrapDddiceDrawerDock(dock) {
+    if (!(dock instanceof HTMLElement) || !(dock.parentElement instanceof HTMLElement)) {
+      return;
+    }
+
+    const parent = dock.parentElement;
+    while (dock.firstChild) {
+      parent.insertBefore(dock.firstChild, dock);
+    }
+    dock.remove();
+  }
+
+  function resetDddiceSidebarLayout() {
+    document.body.classList.remove(DDDICE_SIDEBAR_LAYOUT_BODY_CLASS);
+    document.body.style.removeProperty("--fb-dddice-sidebar-reserve");
+  }
+
+  function getDddiceCanvas(drawer = getDddiceDrawer()) {
+    return drawer?.querySelector('[data-fb-dddice-role="canvas"]') || null;
+  }
+
+  function getDddiceGameLogButton() {
+    return Array.from(document.querySelectorAll('[aria-roledescription="Game Log"]')).find(
+      (element) => element instanceof HTMLElement
+    ) || null;
+  }
+
+  function getDddiceGameLogPane() {
+    const pane = document.querySelector('[data-testid="gamelog-pane"]');
+    return pane instanceof HTMLElement ? pane : null;
+  }
+
+  function getDddiceNativeSidebar() {
+    const sidebar = document.querySelector('.ct-sidebar__inner');
+    return sidebar instanceof HTMLElement ? sidebar : null;
+  }
+
+  function waitForNextAnimationFrame() {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }
+
+  function getDddiceSdk() {
+    const sdk = globalThis.__fbDddiceSdk;
+
+    if (
+      !sdk ||
+      typeof sdk.parseRollEquation !== "function" ||
+      typeof sdk.ThreeDDiceAPI !== "function"
+    ) {
+      return null;
+    }
+
+    return sdk;
+  }
+
+  function normalizeDddiceRoomSlug(value) {
+    const rawValue = String(value || "").trim();
+    if (!rawValue) {
+      return "";
+    }
+
+    try {
+      const parsedUrl = new URL(rawValue);
+      const segments = parsedUrl.pathname.split("/").filter(Boolean);
+      return String(segments[segments.length - 1] || rawValue).trim();
+    } catch (_error) {
+      return rawValue.replace(/^\/+|\/+$/g, "");
+    }
+  }
+
+  function getDddiceRoomUrl(roomSlug) {
+    const normalizedSlug = normalizeDddiceRoomSlug(roomSlug);
+    if (!normalizedSlug) {
+      return "";
+    }
+
+    return `https://dddice.com/room/${encodeURIComponent(normalizedSlug)}`;
+  }
+
+  function normalizeDddiceRoomRecord(value) {
+    return {
+      slug: normalizeDddiceRoomSlug(value?.slug || value?.custom_slug || ""),
+      name: String(value?.name || "").trim(),
+    };
+  }
+
+  function normalizeDddiceRollHistoryEntry(value) {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    const values = Array.isArray(value.values)
+      ? value.values
+          .map((rollValue) => {
+            if (!rollValue || typeof rollValue !== "object") {
+              return null;
+            }
+
+            return {
+              type: String(rollValue.type || "die").trim() || "die",
+              display: String(rollValue.display || rollValue.value || "?").trim() || "?",
+            };
+          })
+          .filter(Boolean)
+      : [];
+
+    const timestamp = Number.parseInt(value.timestamp, 10);
+
+    return {
+      id: String(value.id || `roll-${Date.now()}`).trim(),
+      label: String(value.label || value.equation || "DDDice Roll").trim(),
+      equation: String(value.equation || "").trim(),
+      total: String(value.total || "").trim(),
+      timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+      values,
+    };
+  }
+
+  function buildDddiceRollHistoryEntry(roll) {
+    if (!roll || typeof roll !== "object") {
+      return null;
+    }
+
+    const values = Array.isArray(roll.values)
+      ? roll.values
+          .filter((value) => !value?.is_dropped && !value?.is_cleared)
+          .map((value) => ({
+            type: String(value?.type || "die").trim() || "die",
+            display: formatDddiceRollValueDisplay(value),
+          }))
+      : [];
+
+    return normalizeDddiceRollHistoryEntry({
+      id: String(roll.uuid || roll.id || `roll-${Date.now()}`),
+      label: String(roll.label || roll.equation || "DDDice Roll").trim(),
+      equation: String(roll.equation || "").trim(),
+      total: formatDddiceRollTotalValue(roll.total_value),
+      timestamp: Date.now(),
+      values,
+    });
+  }
+
+  function getDddiceConnectionState() {
+    if (dddiceUiState.activeRoomSlug) {
+      return "connected";
+    }
+
+    if (dddiceUiState.authToken) {
+      return "ready";
+    }
+
+    return "idle";
+  }
+
+  function normalizeDddiceLocalState(value) {
+    const rollHistory = Array.isArray(value?.rollHistory)
+      ? value.rollHistory
+          .map(normalizeDddiceRollHistoryEntry)
+          .filter(Boolean)
+          .slice(0, DDDICE_ROLL_HISTORY_LIMIT)
+      : [];
+
+    return {
+      expanded: false,
+      draftRoomSlug: String(value?.draftRoomSlug ?? value?.roomSlug ?? "").trim(),
+      draftRoomName: String(value?.draftRoomName ?? value?.roomName ?? "").trim(),
+      activeRoomSlug: normalizeDddiceRoomSlug(value?.activeRoomSlug || ""),
+      activeRoomName: String(value?.activeRoomName || "").trim(),
+      authToken: String(value?.authToken || "").trim(),
+      userName: String(value?.userName || "").trim(),
+      userId: String(value?.userId || "").trim(),
+      themeId: String(value?.themeId || "").trim(),
+      rollHistory,
+    };
+  }
+
+  function loadDddiceLocalState() {
+    return new Promise((resolve) => {
+      if (!chrome?.storage?.local?.get) {
+        resolve(normalizeDddiceLocalState(null));
+        return;
+      }
+
+      try {
+        chrome.storage.local.get(DDDICE_LOCAL_STATE_STORAGE_KEY, (result) => {
+          if (chrome.runtime?.lastError) {
+            console.warn(
+              "[Further Beyond] Could not load DDDice local state.",
+              chrome.runtime.lastError
+            );
+            resolve(normalizeDddiceLocalState(null));
+            return;
+          }
+
+          resolve(
+            normalizeDddiceLocalState(result?.[DDDICE_LOCAL_STATE_STORAGE_KEY])
+          );
+        });
+      } catch (error) {
+        console.warn("[Further Beyond] Could not load DDDice local state.", error);
+        resolve(normalizeDddiceLocalState(null));
+      }
+    });
+  }
+
+  function saveDddiceLocalState() {
+    const localState = normalizeDddiceLocalState({
+      expanded: dddiceUiState.expanded,
+      draftRoomSlug: dddiceUiState.draftRoomSlug,
+      draftRoomName: dddiceUiState.draftRoomName,
+      activeRoomSlug: dddiceUiState.activeRoomSlug,
+      activeRoomName: dddiceUiState.activeRoomName,
+      authToken: dddiceUiState.authToken,
+      userName: dddiceUiState.userName,
+      userId: dddiceUiState.userId,
+      themeId: dddiceUiState.themeId,
+      rollHistory: dddiceUiState.rollHistory,
+    });
+
+    return new Promise((resolve) => {
+      if (!chrome?.storage?.local?.set) {
+        resolve(localState);
+        return;
+      }
+
+      try {
+        chrome.storage.local.set(
+          {
+            [DDDICE_LOCAL_STATE_STORAGE_KEY]: localState,
+          },
+          () => {
+            if (chrome.runtime?.lastError) {
+              console.warn(
+                "[Further Beyond] Could not save DDDice local state.",
+                chrome.runtime.lastError
+              );
+            }
+
+            resolve(localState);
+          }
+        );
+      } catch (error) {
+        console.warn("[Further Beyond] Could not save DDDice local state.", error);
+        resolve(localState);
+      }
+    });
+  }
+
+  async function ensureDddiceLocalStateLoaded() {
+    if (dddiceUiState.loaded) {
+      return dddiceUiState;
+    }
+
+    if (dddiceUiState.loadPromise) {
+      return dddiceUiState.loadPromise;
+    }
+
+    dddiceUiState.loadPromise = loadDddiceLocalState()
+      .then((localState) => {
+        dddiceUiState.expanded = localState.expanded;
+        dddiceUiState.draftRoomSlug = localState.draftRoomSlug;
+        dddiceUiState.draftRoomName = localState.draftRoomName;
+        dddiceUiState.activeRoomSlug = localState.activeRoomSlug;
+        dddiceUiState.activeRoomName = localState.activeRoomName;
+        dddiceUiState.authToken = localState.authToken;
+        dddiceUiState.userName = localState.userName;
+        dddiceUiState.userId = localState.userId;
+        dddiceUiState.themeId = localState.themeId;
+        dddiceUiState.rollHistory = localState.rollHistory;
+        dddiceUiState.connectionState = getDddiceConnectionState();
+        dddiceUiState.loaded = true;
+        return dddiceUiState;
+      })
+      .finally(() => {
+        dddiceUiState.loadPromise = null;
+      });
+
+    return dddiceUiState.loadPromise;
+  }
+
+  function getDddiceStateLabel() {
+    if (dddiceUiState.connectionState === "connected") {
+      return "Connected";
+    }
+
+    if (dddiceUiState.connectionState === "ready") {
+      return "Ready";
+    }
+
+    if (dddiceUiState.connectionState === "connecting") {
+      return "Connecting";
+    }
+
+    if (dddiceUiState.connectionState === "error") {
+      return "Attention";
+    }
+
+    return "Guest mode";
+  }
+
+  function getDddiceStatusMessage() {
+    if (dddiceUiState.statusMessage) {
+      return dddiceUiState.statusMessage;
+    }
+
+    if (dddiceUiState.connectionState === "connected") {
+      if (dddiceUiState.activeRoomName) {
+        return `Connected to ${dddiceUiState.activeRoomName}.`;
+      }
+
+      if (dddiceUiState.activeRoomSlug) {
+        return `Connected to room ${dddiceUiState.activeRoomSlug}.`;
+      }
+
+      return "Connected to DDDice.";
+    }
+
+    if (dddiceUiState.connectionState === "ready") {
+      if (dddiceUiState.userName) {
+        return `Guest session ready as ${dddiceUiState.userName}.`;
+      }
+
+      return "Guest session ready.";
+    }
+
+    if (dddiceUiState.connectionState === "connecting") {
+      return "Connecting guest session...";
+    }
+
+    if (dddiceUiState.connectionState === "error") {
+      return "DDDice needs attention before it can roll.";
+    }
+
+    if (dddiceUiState.draftRoomName || dddiceUiState.draftRoomSlug) {
+      return "Room draft saved locally.";
+    }
+
+    return "Guest setup has not started yet.";
+  }
+
+  function getDddiceRoomLabel() {
+    if (dddiceUiState.activeRoomName) {
+      return dddiceUiState.activeRoomName;
+    }
+
+    if (dddiceUiState.activeRoomSlug) {
+      return `Room ${dddiceUiState.activeRoomSlug}`;
+    }
+
+    return "";
+  }
+
+  function getDddiceUserLabel() {
+    if (dddiceUiState.userName) {
+      return dddiceUiState.userName;
+    }
+
+    if (dddiceUiState.userId) {
+      return dddiceUiState.userId;
+    }
+
+    return "";
+  }
+
+  function findDddiceInfoSidebar() {
+    return Array.from(document.querySelectorAll('[role="dialog"]')).find(
+      (dialog) => dialog.id !== CONFIG_MODAL_ID && !dialog.closest(`#${CONFIG_MODAL_ID}`)
+    );
+  }
+
+  function parseDddiceSidebarModifier(text) {
+    const normalizedText = normalizeText(text)
+      .toLowerCase()
+      .replace(/\bplus\b/g, "+")
+      .replace(/\bminus\b/g, "-");
+    const match = /([+-])\s*(\d+)/.exec(normalizedText);
+
+    if (!match) {
+      return null;
+    }
+
+    const value = Number.parseInt(match[2], 10);
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+
+    return match[1] === "-" ? -value : value;
+  }
+
+  function formatDddiceSidebarExpression(modifier) {
+    if (!Number.isFinite(modifier)) {
+      return "";
+    }
+
+    return modifier >= 0 ? `d20 + ${modifier}` : `d20 - ${Math.abs(modifier)}`;
+  }
+
+  function buildDddiceSidebarRollDefinition(dialog) {
+    if (!(dialog instanceof HTMLElement)) {
+      return null;
+    }
+
+    const heading = dialog.querySelector("h1, h2");
+    const headingText = normalizeText(heading?.textContent || "");
+    const headingLower = headingText.toLowerCase();
+    const modifier = parseDddiceSidebarModifier(headingText);
+
+    if (!headingText || !Number.isFinite(modifier)) {
+      return null;
+    }
+
+    const skillName = DDDICE_SKILL_NAMES.find((name) =>
+      headingLower.includes(name.toLowerCase())
+    );
+    if (skillName) {
+      return {
+        label: skillName,
+        expression: formatDddiceSidebarExpression(modifier),
+      };
+    }
+
+    if (headingLower.includes("initiative")) {
+      return {
+        label: "Initiative",
+        expression: formatDddiceSidebarExpression(modifier),
+      };
+    }
+
+    const abilityName = DDDICE_ABILITY_NAMES.find(
+      (name) =>
+        headingLower.includes(name.toLowerCase()) && headingLower.includes("saving")
+    );
+    if (abilityName) {
+      return {
+        label: `${abilityName} Save`,
+        expression: formatDddiceSidebarExpression(modifier),
+      };
+    }
+
+    const abilityCheckName = DDDICE_ABILITY_NAMES.find((name) =>
+      headingLower.includes(name.toLowerCase())
+    );
+    if (abilityCheckName) {
+      return {
+        label: `${abilityCheckName} Check`,
+        expression: formatDddiceSidebarExpression(modifier),
+      };
+    }
+
+    return null;
+  }
+
+  function canUseDddiceNativeRolls() {
+    return (
+      getExtensionSettings().dddiceEnabled &&
+      dddiceUiState.loaded &&
+      dddiceUiState.connectionState !== "connecting" &&
+      !!dddiceUiState.authToken &&
+      !!dddiceUiState.activeRoomSlug &&
+      !!dddiceUiState.themeId &&
+      !!getDddiceSdk()
+    );
+  }
+
+  function shouldSuppressDddiceNativeDice() {
+    return !!getExtensionSettings().dddiceSuppressNativeDice;
+  }
+
+  function trimDddiceAttackLabel(value) {
+    const normalizedValue = normalizeText(value || "")
+      .replace(/\*+$/g, "")
+      .trim();
+
+    if (!normalizedValue) {
+      return "";
+    }
+
+    const suffixMatch = normalizedValue.match(
+      /^(.*?)(?=(?:\bMelee Weapon\b|\bRanged Weapon\b|\bMelee Attack\b|\bRanged Attack\b|\bCustomized\b|\bMastery\b|\bAmmunition\b|\bReach\b|\bRange\b|\bHit\b|\bUse\b|\d+\s*ft\.?\b|$))/i
+    );
+    return normalizeText(suffixMatch?.[1] || normalizedValue)
+      .replace(/\*+$/g, "")
+      .trim();
+  }
+
+  function getDddiceCombatAttackLabel(attackRow) {
+    if (!(attackRow instanceof HTMLElement)) {
+      return "";
+    }
+
+    const nameElement = attackRow.querySelector(".ddbc-combat-attack__name");
+    if (!(nameElement instanceof HTMLElement)) {
+      return "";
+    }
+
+    const directText = trimDddiceAttackLabel(
+      Array.from(nameElement.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || "")
+        .join(" ")
+    );
+    if (directText) {
+      return directText;
+    }
+
+    const firstMeaningfulChildText = Array.from(nameElement.children)
+      .map((child) => trimDddiceAttackLabel(child.textContent || ""))
+      .find(Boolean);
+    if (firstMeaningfulChildText) {
+      return firstMeaningfulChildText;
+    }
+
+    return trimDddiceAttackLabel(nameElement.textContent || "");
+  }
+
+  function findDddiceNativeSidebar() {
+    const sidebars = Array.from(document.querySelectorAll(".ct-sidebar"));
+
+    return sidebars.find((sidebar) => {
+      if (!(sidebar instanceof HTMLElement)) {
+        return false;
+      }
+
+      const rect = sidebar.getBoundingClientRect();
+      const style = window.getComputedStyle(sidebar);
+      return (
+        rect.width >= 280 &&
+        rect.height >= 320 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden"
+      );
+    }) || null;
+  }
+
+  function syncDddiceDrawerPlacement(drawer) {
+    if (!(drawer instanceof HTMLElement)) {
+      return;
+    }
+
+    if (drawer.classList.contains("fb-dddice-drawer--embedded")) {
+      drawer.dataset.layout = "embedded";
+      drawer.style.removeProperty("--fb-dddice-sidebar-left");
+      drawer.style.removeProperty("--fb-dddice-sidebar-top");
+      drawer.style.removeProperty("--fb-dddice-sidebar-width");
+      drawer.style.removeProperty("--fb-dddice-sidebar-height");
+      return;
+    }
+
+    if (drawer.classList.contains("fb-dddice-drawer--roller")) {
+      const diceButton = getDddiceDiceButton();
+      const buttonRect = diceButton?.getBoundingClientRect();
+      const gap = 12;
+
+      drawer.dataset.layout = "roller";
+      if (!buttonRect) {
+        return;
+      }
+
+      drawer.style.setProperty("--fb-dddice-roller-left", `${Math.max(10, Math.round(buttonRect.left))}px`);
+      drawer.style.setProperty(
+        "--fb-dddice-roller-bottom",
+        `${Math.max(72, Math.round(window.innerHeight - buttonRect.top + gap))}px`
+      );
+      return;
+    }
+
+    const dock = getDddiceDrawerDock();
+    if (dock instanceof HTMLElement) {
+      unwrapDddiceDrawerDock(dock);
+    }
+
+    if (drawer.parentElement !== document.body) {
+      document.body.appendChild(drawer);
+    }
+
+    const sidebar = findDddiceNativeSidebar();
+    const sidebarRect = sidebar?.getBoundingClientRect();
+    const minimumViewportWidth = 1280;
+
+    if (
+      !(sidebar instanceof HTMLElement) ||
+      !sidebarRect ||
+      window.innerWidth < minimumViewportWidth
+    ) {
+      drawer.dataset.layout = "floating";
+      drawer.style.removeProperty("--fb-dddice-sidebar-left");
+      drawer.style.removeProperty("--fb-dddice-sidebar-top");
+      drawer.style.removeProperty("--fb-dddice-sidebar-width");
+      drawer.style.removeProperty("--fb-dddice-sidebar-height");
+      resetDddiceSidebarLayout();
+      return;
+    }
+
+    const gap = 16;
+    const panelWidth = Math.max(320, Math.min(360, Math.round(sidebarRect.width)));
+    const panelLeft = Math.round(sidebarRect.left + window.scrollX - panelWidth - gap);
+    const panelTop = Math.round(sidebarRect.top + window.scrollY);
+    const panelHeight = Math.max(420, Math.round(sidebar.offsetHeight || sidebarRect.height));
+    const sheetInner = document.querySelector(".ct-character-sheet__inner");
+    const sheetInnerRect =
+      sheetInner instanceof HTMLElement ? sheetInner.getBoundingClientRect() : null;
+
+    if (panelLeft < 24) {
+      drawer.dataset.layout = "floating";
+      drawer.style.removeProperty("--fb-dddice-sidebar-left");
+      drawer.style.removeProperty("--fb-dddice-sidebar-top");
+      drawer.style.removeProperty("--fb-dddice-sidebar-width");
+      drawer.style.removeProperty("--fb-dddice-sidebar-height");
+      resetDddiceSidebarLayout();
+      return;
+    }
+
+    drawer.dataset.layout = "sidebar";
+    drawer.style.setProperty("--fb-dddice-sidebar-left", `${panelLeft}px`);
+    drawer.style.setProperty("--fb-dddice-sidebar-top", `${panelTop}px`);
+    drawer.style.setProperty("--fb-dddice-sidebar-width", `${panelWidth}px`);
+    drawer.style.setProperty("--fb-dddice-sidebar-height", `${panelHeight}px`);
+
+    const reserveWidth = sheetInnerRect
+      ? Math.max(
+          panelWidth + gap,
+          Math.ceil(sheetInnerRect.right - (panelLeft - window.scrollX) + 24)
+        )
+      : panelWidth + gap;
+
+    document.body.classList.add(DDDICE_SIDEBAR_LAYOUT_BODY_CLASS);
+    document.body.style.setProperty(
+      "--fb-dddice-sidebar-reserve",
+      `${reserveWidth}px`
+    );
+  }
+
+  function scheduleDddiceDrawerPlacement() {
+    if (dddiceDrawerPlacementPending) {
+      return;
+    }
+
+    dddiceDrawerPlacementPending = true;
+    window.requestAnimationFrame(() => {
+      dddiceDrawerPlacementPending = false;
+      syncDddiceDrawerPlacement(getDddiceDrawer());
+    });
+  }
+
+  function getDddiceIntegratedDiceContext(button) {
+    if (!(button instanceof HTMLButtonElement)) {
+      return null;
+    }
+
+    const attackRow = button.closest(".ddbc-combat-attack");
+    if (attackRow instanceof HTMLElement) {
+      const attackName = getDddiceCombatAttackLabel(attackRow);
+      const labelBase = attackName || "Attack";
+      const actionCell = button.closest(
+        ".ddbc-combat-attack__action, .ddbc-combat-attack__damage, .ddbc-combat-item-attack__damage"
+      );
+
+      if (actionCell?.classList.contains("ddbc-combat-attack__action")) {
+        return {
+          kind: "modifier",
+          label: `${labelBase} To Hit`,
+        };
+      }
+
+      if (
+        actionCell?.classList.contains("ddbc-combat-attack__damage") ||
+        actionCell?.classList.contains("ddbc-combat-item-attack__damage")
+      ) {
+        return {
+          kind: "damage",
+          labelBase,
+        };
+      }
+    }
+
+    const abilityCard = button.closest(".ddbc-ability-summary");
+    if (abilityCard instanceof HTMLElement) {
+      const abilityName = normalizeText(
+        abilityCard.querySelector(".ddbc-ability-summary__label")?.textContent || ""
+      );
+      if (abilityName) {
+        return {
+          kind: "modifier",
+          label: `${abilityName} Check`,
+        };
+      }
+    }
+
+    const savingThrowCard = button.closest(".ddbc-saving-throws-summary__ability");
+    if (savingThrowCard instanceof HTMLElement) {
+      const saveName = normalizeText(
+        savingThrowCard.querySelector("h3")?.textContent || ""
+      ).replace(/Saving Throw/i, "Save");
+      if (saveName) {
+        return {
+          kind: "modifier",
+          label: saveName,
+        };
+      }
+    }
+
+    const skillRow = button.closest(".ct-skills__item");
+    if (skillRow instanceof HTMLElement) {
+      const skillName = normalizeText(
+        skillRow.querySelector(".ct-skills__col--skill")?.textContent || ""
+      );
+      if (skillName) {
+        return {
+          kind: "modifier",
+          label: skillName,
+        };
+      }
+    }
+
+    const initiativeCard = button.closest(
+      ".ct-combat-tablet__extra--initiative, .styles_box__PLQui"
+    );
+    if (initiativeCard instanceof HTMLElement) {
+      const initiativeLabel = normalizeText(
+        initiativeCard.querySelector(".styles_label__6xv1b, h2")?.textContent ||
+          initiativeCard.textContent ||
+          ""
+      );
+      if (/initiative/i.test(initiativeLabel)) {
+        return {
+          kind: "modifier",
+          label: "Initiative",
+        };
+      }
+    }
+
+    return null;
+  }
+
+  function formatDddiceActionEffectLabel(labelBase, damageType) {
+    const normalizedLabelBase = normalizeText(labelBase || "") || "Attack";
+    const normalizedDamageType = normalizeText(damageType || "");
+
+    if (!normalizedDamageType) {
+      return normalizedLabelBase;
+    }
+
+    if (/healing/i.test(normalizedDamageType)) {
+      return `${normalizedLabelBase} Healing`;
+    }
+
+    if (/damage/i.test(normalizedDamageType)) {
+      return `${normalizedLabelBase} ${normalizedDamageType}`;
+    }
+
+    return `${normalizedLabelBase} ${normalizedDamageType} Damage`;
+  }
+
+  function buildDddiceIntegratedDiceRollDefinition(button, metadata) {
+    const context = getDddiceIntegratedDiceContext(button);
+    if (!context || !metadata) {
+      return null;
+    }
+
+    if (context.kind === "modifier" && Number.isFinite(metadata.modifier)) {
+      return {
+        label: context.label,
+        expression: formatDddiceSidebarExpression(metadata.modifier),
+      };
+    }
+
+    if (
+      context.kind === "damage" &&
+      typeof metadata.expression === "string" &&
+      metadata.expression.trim()
+    ) {
+      return {
+        label: formatDddiceActionEffectLabel(
+          context.labelBase,
+          metadata.damageType
+        ),
+        expression: metadata.expression.trim(),
+      };
+    }
+
+    return null;
+  }
+
+  function getDddiceCanvasStatusMessage(hasSdk, hasSession, hasRoom) {
+    if (!hasSdk) {
+      return "Local DDDice SDK bundle is unavailable.";
+    }
+
+    if (!hasSession) {
+      return "Connect a guest session to start the live dice tray.";
+    }
+
+    if (!hasRoom) {
+      return "Create or join a room to target DDDice rolls.";
+    }
+
+    if (dddiceUiState.activeRoomName) {
+      return `Rolling into ${dddiceUiState.activeRoomName}. Results appear here, and View 3D room opens the full DDDice table.`;
+    }
+
+    if (dddiceUiState.activeRoomSlug) {
+      return `Rolling into ${dddiceUiState.activeRoomSlug}. Results appear here, and View 3D room opens the full DDDice table.`;
+    }
+
+    return "Results appear here when you roll.";
+  }
+
+  function formatDddiceRollTotalValue(totalValue) {
+    if (Array.isArray(totalValue)) {
+      return totalValue
+        .map((entry) => {
+          if (typeof entry === "string") {
+            return entry;
+          }
+
+          if (entry && typeof entry === "object" && typeof entry.src === "string") {
+            return "";
+          }
+
+          return String(entry || "");
+        })
+        .join(" ")
+        .trim();
+    }
+
+    return String(totalValue || "").trim();
+  }
+
+  function formatDddiceRollValueDisplay(rollValue) {
+    if (!rollValue || typeof rollValue !== "object") {
+      return "?";
+    }
+
+    const displayValue = rollValue.value_to_display;
+    const fallbackValue = Number.isFinite(rollValue.value)
+      ? String(rollValue.value)
+      : "";
+    const rawText =
+      typeof displayValue === "string" || typeof displayValue === "number"
+        ? String(displayValue).trim()
+        : fallbackValue;
+
+    if (rollValue.type === "mod") {
+      if (rawText && /^[+-]/.test(rawText)) {
+        return rawText;
+      }
+
+      const numericValue = Number.parseFloat(rawText || fallbackValue);
+      if (Number.isFinite(numericValue)) {
+        return `${numericValue >= 0 ? "+" : ""}${numericValue}`;
+      }
+    }
+
+    return rawText || "?";
+  }
+
+  function formatDddiceRollHistoryTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+
+    return date.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+
+  function splitDddiceRollHistoryLabel(label) {
+    const normalizedLabel = String(label || "DDDice Roll").trim() || "DDDice Roll";
+    const suffixes = [
+      "To Hit",
+      "Damage",
+      "Save",
+      "Check",
+      "Healing",
+      "Heal",
+    ];
+
+    for (const suffix of suffixes) {
+      const escapedSuffix = suffix.replace(/\s+/g, "\\s+");
+      const match = normalizedLabel.match(
+        new RegExp(`^(.*?)(?:\\s+${escapedSuffix})$`, "i")
+      );
+      if (match?.[1]?.trim()) {
+        return {
+          title: match[1].trim(),
+          accent: suffix,
+        };
+      }
+    }
+
+    return {
+      title: normalizedLabel,
+      accent: "",
+    };
+  }
+
+  function getDddicePrimaryDieType(entry) {
+    const primaryValue = Array.isArray(entry?.values)
+      ? entry.values.find((rollValue) =>
+          /^d\d+$/i.test(String(rollValue?.type || "").trim())
+        )
+      : null;
+
+    if (primaryValue?.type) {
+      return String(primaryValue.type).trim().toLowerCase();
+    }
+
+    const equationMatch = String(entry?.equation || "").match(/d\d+/i);
+    return equationMatch ? equationMatch[0].toLowerCase() : "d20";
+  }
+
+  function formatDddiceDieTypeLabel(dieType) {
+    const normalizedDieType = String(dieType || "d20").trim().toLowerCase();
+    return normalizedDieType === "d100" ? "D%" : normalizedDieType.toUpperCase();
+  }
+
+  function formatDddiceRollValueSummary(values) {
+    if (!Array.isArray(values) || !values.length) {
+      return "";
+    }
+
+    return values.reduce((summary, rollValue) => {
+      const display = String(rollValue?.display || "").trim();
+      if (!display) {
+        return summary;
+      }
+
+      if (!summary) {
+        return display.replace(/^\+/, "");
+      }
+
+      if (/^[+-]/.test(display)) {
+        return `${summary} ${display[0]} ${display.slice(1)}`.trim();
+      }
+
+      return `${summary} + ${display}`;
+    }, "");
+  }
+
+  function renderDddiceRollHistory() {
+    const logList = getDddiceNativePanel()?.querySelector(
+      '[data-fb-dddice-role="log-list"]'
+    );
+    if (!(logList instanceof HTMLElement)) {
+      return;
+    }
+
+    if (!dddiceUiState.rollHistory.length) {
+      const emptyState = document.createElement("p");
+      emptyState.className = "fb-dddice-log__empty";
+      emptyState.textContent = "Your DDDice rolls will show up here.";
+      logList.replaceChildren(emptyState);
+      return;
+    }
+
+    const entries = [...dddiceUiState.rollHistory]
+      .sort((left, right) => left.timestamp - right.timestamp)
+      .map((entry) => {
+      const article = document.createElement("article");
+      const header = document.createElement("div");
+      const heading = document.createElement("div");
+      const title = document.createElement("strong");
+      const accent = document.createElement("span");
+      const time = document.createElement("span");
+      const body = document.createElement("div");
+      const roll = document.createElement("div");
+      const dieIcon = document.createElement("span");
+      const meta = document.createElement("div");
+      const summary = document.createElement("strong");
+      const equation = document.createElement("span");
+      const result = document.createElement("div");
+      const equals = document.createElement("span");
+      const total = document.createElement("strong");
+      const labelParts = splitDddiceRollHistoryLabel(entry.label);
+      const dieType = getDddicePrimaryDieType(entry);
+      const summaryText =
+        formatDddiceRollValueSummary(entry.values) ||
+        entry.total ||
+        entry.equation ||
+        "Roll";
+
+      article.className = "fb-dddice-log__entry";
+      header.className = "fb-dddice-log__entry-header";
+      heading.className = "fb-dddice-log__entry-heading";
+      title.className = "fb-dddice-log__entry-title";
+      accent.className = "fb-dddice-log__entry-accent";
+      time.className = "fb-dddice-log__entry-time";
+      body.className = "fb-dddice-log__entry-body";
+      roll.className = "fb-dddice-log__entry-roll";
+      dieIcon.className = "fb-dddice-log__entry-die-icon";
+      meta.className = "fb-dddice-log__entry-meta";
+      summary.className = "fb-dddice-log__entry-summary";
+      equation.className = "fb-dddice-log__entry-equation";
+      result.className = "fb-dddice-log__entry-result";
+      equals.className = "fb-dddice-log__entry-equals";
+      total.className = "fb-dddice-log__entry-total";
+
+      title.textContent = labelParts.accent ? `${labelParts.title}:` : labelParts.title;
+      accent.textContent = labelParts.accent;
+      time.textContent = formatDddiceRollHistoryTimestamp(entry.timestamp);
+      dieIcon.dataset.die = dieType;
+      dieIcon.textContent = formatDddiceDieTypeLabel(dieType);
+      summary.textContent = summaryText;
+      equation.textContent = entry.equation || "Custom roll";
+      equals.textContent = "=";
+      total.textContent = entry.total || "?";
+      total.setAttribute(
+        "aria-label",
+        entry.total ? `Total ${entry.total}` : "Roll total unavailable"
+      );
+
+      heading.append(title);
+      if (labelParts.accent) {
+        heading.appendChild(accent);
+      }
+
+      header.append(heading, time);
+      meta.append(summary, equation);
+      roll.append(dieIcon, meta);
+      result.append(equals, total);
+      body.append(roll, result);
+      article.append(header, body);
+
+        return article;
+      });
+
+    logList.replaceChildren(...entries);
+  }
+
+  function scrollDddiceRollHistoryToBottom() {
+    const panel = getDddiceNativePanel();
+    if (!(panel instanceof HTMLElement)) {
+      return;
+    }
+
+    let scrollContainer = panel;
+    let currentElement = panel;
+
+    while (currentElement instanceof HTMLElement) {
+      const style = window.getComputedStyle(currentElement);
+      if (
+        /(auto|scroll)/.test(style.overflowY) &&
+        currentElement.scrollHeight > currentElement.clientHeight
+      ) {
+        scrollContainer = currentElement;
+        break;
+      }
+
+      currentElement = currentElement.parentElement;
+    }
+
+    const applyScroll = () => {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    };
+
+    window.requestAnimationFrame(() => {
+      applyScroll();
+      window.requestAnimationFrame(applyScroll);
+      window.setTimeout(applyScroll, 120);
+    });
+  }
+
+  function appendDddiceRollHistory(roll) {
+    const entry = buildDddiceRollHistoryEntry(roll);
+    if (!entry) {
+      return;
+    }
+
+    dddiceUiState.rollHistory = [
+      ...dddiceUiState.rollHistory.filter((existingEntry) => existingEntry.id !== entry.id),
+      entry,
+    ]
+      .sort((left, right) => left.timestamp - right.timestamp)
+      .slice(-DDDICE_ROLL_HISTORY_LIMIT);
+
+    renderDddiceRollHistory();
+    scrollDddiceRollHistoryToBottom();
+    void saveDddiceLocalState();
+  }
+
+  function renderDddiceRollOutput(roll) {
+    const output = getDddiceDrawer()?.querySelector(
+      '[data-fb-dddice-role="roll-output"]'
+    );
+    if (!(output instanceof HTMLElement) || !roll || typeof roll !== "object") {
+      return;
+    }
+
+    const summary = document.createElement("div");
+    const title = document.createElement("span");
+    const total = document.createElement("strong");
+    const diceList = document.createElement("div");
+    const totalText = formatDddiceRollTotalValue(roll.total_value);
+    const values = Array.isArray(roll.values)
+      ? roll.values.filter((value) => !value?.is_dropped && !value?.is_cleared)
+      : [];
+
+    summary.className = "fb-dddice-drawer__roll-summary";
+    title.className = "fb-dddice-drawer__roll-title";
+    total.className = "fb-dddice-drawer__roll-total";
+    diceList.className = "fb-dddice-drawer__roll-dice";
+
+    title.textContent = String(roll.label || roll.equation || "Latest roll").trim();
+    total.textContent = totalText ? `Total ${totalText}` : "";
+    summary.append(title, total);
+
+    values.forEach((rollValue) => {
+      const die = document.createElement("span");
+      const dieType = document.createElement("span");
+      const dieValue = document.createElement("strong");
+
+      die.className = "fb-dddice-drawer__die";
+      if (rollValue.type === "mod") {
+        die.dataset.kind = "modifier";
+      }
+
+      dieType.className = "fb-dddice-drawer__die-type";
+      dieValue.className = "fb-dddice-drawer__die-value";
+
+      dieType.textContent =
+        rollValue.type === "mod"
+          ? "mod"
+          : String(rollValue.type || "die").toUpperCase();
+      dieValue.textContent = formatDddiceRollValueDisplay(rollValue);
+      die.append(dieType, dieValue);
+      diceList.appendChild(die);
+    });
+
+    output.hidden = false;
+    output.removeAttribute("data-animate");
+    output.replaceChildren(summary, diceList);
+    void output.offsetWidth;
+    output.dataset.animate = "true";
+  }
+
+  function syncDddiceDrawer(drawer) {
+    if (!(drawer instanceof HTMLElement)) {
+      return;
+    }
+
+    const isEmbedded = drawer.classList.contains("fb-dddice-drawer--embedded");
+    if (isEmbedded) {
+      drawer.dataset.layout = "embedded";
+    }
+
+    const toggle = drawer.querySelector(".fb-dddice-drawer__toggle");
+    const toggleCopy = drawer.querySelector(".fb-dddice-drawer__toggle-copy");
+    const panel = drawer.querySelector(".fb-dddice-drawer__panel");
+    const state = drawer.querySelector(".fb-dddice-drawer__state");
+    const statusCopy = drawer.querySelector(".fb-dddice-drawer__status-copy");
+    const diceStage = drawer.querySelector(".fb-dddice-drawer__stage");
+    const diceStageStatus = drawer.querySelector(
+      '[data-fb-dddice-role="canvas-status"]'
+    );
+    const user = drawer.querySelector(".fb-dddice-drawer__user");
+    const userValue = drawer.querySelector(".fb-dddice-drawer__user-value");
+    const room = drawer.querySelector(".fb-dddice-drawer__room");
+    const roomValue = drawer.querySelector(".fb-dddice-drawer__room-value");
+    const roomNameInput = drawer.querySelector('[data-fb-dddice-field="draftRoomName"]');
+    const roomSlugInput = drawer.querySelector('[data-fb-dddice-field="draftRoomSlug"]');
+    const roomConfig = drawer.querySelector('[data-fb-dddice-role="room-config"]');
+    const connectButton = drawer.querySelector(
+      '[data-fb-dddice-action="connect-guest"]'
+    );
+    const createRoomButton = drawer.querySelector(
+      '[data-fb-dddice-action="create-room"]'
+    );
+    const joinRoomButton = drawer.querySelector(
+      '[data-fb-dddice-action="join-room"]'
+    );
+    const rollCustomButton = drawer.querySelector(
+      '[data-fb-dddice-action="roll-custom"]'
+    );
+    const view3dRoomButton = drawer.querySelector(
+      '[data-fb-dddice-action="open-3d-room"]'
+    );
+    const customRollInput = drawer.querySelector(
+      '[data-fb-dddice-role="custom-roll-input"]'
+    );
+    const quickAddButtons = Array.from(
+      drawer.querySelectorAll('[data-fb-dddice-die]')
+    );
+    const roomLabel = getDddiceRoomLabel();
+    const userLabel = getDddiceUserLabel();
+    const isBusy = dddiceUiState.connectionState === "connecting";
+    const hasSdk = !!getDddiceSdk();
+    const hasSession = !!dddiceUiState.authToken;
+    const hasRoomDraft = !!normalizeDddiceRoomSlug(dddiceUiState.draftRoomSlug);
+    const hasTheme = !!dddiceUiState.themeId;
+    const hasActiveRoom = !!dddiceUiState.activeRoomSlug;
+    const canComposeCustomRoll = !isBusy && hasSession && hasTheme && hasSdk;
+    const canSubmitCustomRoll =
+      canComposeCustomRoll && hasActiveRoom;
+    const hasCustomFormula =
+      customRollInput instanceof HTMLInputElement &&
+      !!String(customRollInput.value || "").trim();
+
+    drawer.dataset.expanded = isEmbedded || dddiceUiState.expanded ? "true" : "false";
+
+    if (toggle instanceof HTMLElement) {
+      toggle.setAttribute(
+        "aria-expanded",
+        isEmbedded || dddiceUiState.expanded ? "true" : "false"
+      );
+    }
+
+    if (toggleCopy) {
+      toggleCopy.textContent = dddiceUiState.expanded ? "Hide" : "Open";
+    }
+
+    if (panel instanceof HTMLElement) {
+      panel.hidden = isEmbedded ? false : !dddiceUiState.expanded;
+    }
+
+    if (state instanceof HTMLElement) {
+      state.textContent = getDddiceStateLabel();
+      state.dataset.state = dddiceUiState.connectionState;
+    }
+
+    if (statusCopy) {
+      statusCopy.textContent = getDddiceStatusMessage();
+    }
+
+    if (diceStage instanceof HTMLElement) {
+      diceStage.dataset.state = !hasSdk
+        ? "error"
+        : canSubmitCustomRoll
+          ? "connected"
+          : hasSession
+            ? "ready"
+            : "idle";
+    }
+
+    if (diceStageStatus) {
+      diceStageStatus.textContent = getDddiceCanvasStatusMessage(
+        hasSdk,
+        hasSession,
+        hasActiveRoom
+      );
+    }
+
+    if (user instanceof HTMLElement) {
+      user.hidden = !userLabel;
+    }
+
+    if (userValue) {
+      userValue.textContent = userLabel;
+    }
+
+    if (room instanceof HTMLElement) {
+      room.hidden = !roomLabel;
+    }
+
+    if (roomValue) {
+      roomValue.textContent = roomLabel;
+    }
+
+    if (
+      roomNameInput instanceof HTMLInputElement &&
+      roomNameInput.value !== dddiceUiState.draftRoomName
+    ) {
+      roomNameInput.value = dddiceUiState.draftRoomName;
+    }
+
+    if (
+      roomSlugInput instanceof HTMLInputElement &&
+      roomSlugInput.value !== dddiceUiState.draftRoomSlug
+    ) {
+      roomSlugInput.value = dddiceUiState.draftRoomSlug;
+    }
+
+    if (roomNameInput instanceof HTMLInputElement) {
+      roomNameInput.disabled = isBusy;
+    }
+
+    if (roomSlugInput instanceof HTMLInputElement) {
+      roomSlugInput.disabled = isBusy;
+    }
+
+    if (roomConfig instanceof HTMLDetailsElement) {
+      const needsRoomSetup = !hasSession || !hasActiveRoom;
+      const wasAutoOpened =
+        roomConfig.dataset.fbDddiceAutoRoomConfig === "true";
+
+      if (needsRoomSetup) {
+        roomConfig.open = true;
+        roomConfig.dataset.fbDddiceAutoRoomConfig = "true";
+      } else if (wasAutoOpened) {
+        roomConfig.open = false;
+        roomConfig.dataset.fbDddiceAutoRoomConfig = "false";
+      }
+    }
+
+    if (connectButton instanceof HTMLButtonElement) {
+      connectButton.disabled = isBusy;
+      connectButton.textContent = hasSession ? "Refresh guest" : "Connect guest";
+    }
+
+    if (createRoomButton instanceof HTMLButtonElement) {
+      createRoomButton.disabled = isBusy || !hasSession;
+    }
+
+    if (joinRoomButton instanceof HTMLButtonElement) {
+      joinRoomButton.disabled = isBusy || !hasSession || !hasRoomDraft;
+    }
+
+    if (customRollInput instanceof HTMLInputElement) {
+      customRollInput.disabled = !canComposeCustomRoll;
+    }
+
+    quickAddButtons.forEach((button) => {
+      if (button instanceof HTMLButtonElement) {
+        button.disabled = !canComposeCustomRoll;
+      }
+    });
+
+    if (rollCustomButton instanceof HTMLButtonElement) {
+      rollCustomButton.disabled = !canSubmitCustomRoll || !hasCustomFormula;
+    }
+
+    if (view3dRoomButton instanceof HTMLButtonElement) {
+      view3dRoomButton.disabled = !hasActiveRoom;
+    }
+
+    if (dddiceRuntimeState.engine) {
+      dddiceRuntimeState.connectedRoomSlug = hasActiveRoom
+        ? normalizeDddiceRoomSlug(dddiceUiState.activeRoomSlug)
+        : "";
+    }
+
+    renderDddiceRollHistory();
+    syncDddiceVisualizer(drawer);
+    scheduleDddiceDrawerPlacement();
+  }
+
+  function syncDddiceConfigPanel(panel = getDddiceConfigPanel()) {
+    if (!(panel instanceof HTMLElement)) {
+      return;
+    }
+
+    const integrationEnabled = !!getExtensionSettings().dddiceEnabled;
+    const userLabel = getDddiceUserLabel();
+    const roomLabel = getDddiceRoomLabel();
+    const isBusy = dddiceUiState.connectionState === "connecting";
+    const hasSession = !!dddiceUiState.authToken;
+    const hasRoomDraft = !!normalizeDddiceRoomSlug(dddiceUiState.draftRoomSlug);
+    const hasActiveRoom = !!dddiceUiState.activeRoomSlug;
+    const state = panel.querySelector(".fb-dddice-drawer__state");
+    const statusCopy = panel.querySelector(".fb-dddice-drawer__status-copy");
+    const configHint = panel.querySelector('[data-fb-dddice-role="config-hint"]');
+    const user = panel.querySelector(".fb-dddice-drawer__user");
+    const userValue = panel.querySelector(".fb-dddice-drawer__user-value");
+    const room = panel.querySelector(".fb-dddice-drawer__room");
+    const roomValue = panel.querySelector(".fb-dddice-drawer__room-value");
+    const roomNameInput = panel.querySelector('[data-fb-dddice-field="draftRoomName"]');
+    const roomSlugInput = panel.querySelector('[data-fb-dddice-field="draftRoomSlug"]');
+    const connectButton = panel.querySelector('[data-fb-dddice-action="connect-guest"]');
+    const createRoomButton = panel.querySelector('[data-fb-dddice-action="create-room"]');
+    const joinRoomButton = panel.querySelector('[data-fb-dddice-action="join-room"]');
+    const view3dRoomButton = panel.querySelector('[data-fb-dddice-action="open-3d-room"]');
+
+    panel.dataset.enabled = integrationEnabled ? "true" : "false";
+
+    if (state instanceof HTMLElement) {
+      state.textContent = integrationEnabled ? getDddiceStateLabel() : "Disabled";
+      state.dataset.state = integrationEnabled ? dddiceUiState.connectionState : "idle";
+    }
+
+    if (statusCopy instanceof HTMLElement) {
+      statusCopy.textContent = integrationEnabled
+        ? getDddiceStatusMessage()
+        : "Enable DDDice dice replacement above to override D&D Beyond's dice button and Game Log.";
+    }
+
+    if (configHint instanceof HTMLElement) {
+      configHint.textContent = hasActiveRoom
+        ? "Use D&D Beyond's bottom-left dice button to open the DDDice custom roller."
+        : "Connect a guest and join or create a room here, then use D&D Beyond's bottom-left dice button to roll with DDDice.";
+    }
+
+    if (user instanceof HTMLElement) {
+      user.hidden = !userLabel;
+    }
+
+    if (userValue instanceof HTMLElement) {
+      userValue.textContent = userLabel;
+    }
+
+    if (room instanceof HTMLElement) {
+      room.hidden = !roomLabel;
+    }
+
+    if (roomValue instanceof HTMLElement) {
+      roomValue.textContent = roomLabel;
+    }
+
+    if (
+      roomNameInput instanceof HTMLInputElement &&
+      roomNameInput.value !== dddiceUiState.draftRoomName
+    ) {
+      roomNameInput.value = dddiceUiState.draftRoomName;
+    }
+
+    if (
+      roomSlugInput instanceof HTMLInputElement &&
+      roomSlugInput.value !== dddiceUiState.draftRoomSlug
+    ) {
+      roomSlugInput.value = dddiceUiState.draftRoomSlug;
+    }
+
+    if (roomNameInput instanceof HTMLInputElement) {
+      roomNameInput.disabled = !integrationEnabled || isBusy;
+    }
+
+    if (roomSlugInput instanceof HTMLInputElement) {
+      roomSlugInput.disabled = !integrationEnabled || isBusy;
+    }
+
+    if (connectButton instanceof HTMLButtonElement) {
+      connectButton.disabled = !integrationEnabled || isBusy;
+      connectButton.textContent = hasSession ? "Refresh guest" : "Connect guest";
+    }
+
+    if (createRoomButton instanceof HTMLButtonElement) {
+      createRoomButton.disabled = !integrationEnabled || isBusy || !hasSession;
+    }
+
+    if (joinRoomButton instanceof HTMLButtonElement) {
+      joinRoomButton.disabled =
+        !integrationEnabled || isBusy || !hasSession || !hasRoomDraft;
+    }
+
+    if (view3dRoomButton instanceof HTMLButtonElement) {
+      view3dRoomButton.disabled = !integrationEnabled || !hasActiveRoom;
+    }
+  }
+
+  function updateDddiceUiState(nextState) {
+    Object.assign(dddiceUiState, nextState);
+    mountDddiceNativePanel();
+    mountDddiceRollerPanel();
+    syncDddiceDrawer(getDddiceDrawer());
+    syncDddiceConfigPanel();
+    syncDddiceSidebarAction(findDddiceInfoSidebar());
+  }
+
+  function destroyDddiceVisualizer() {
+    dddiceRuntimeState.visualizer = null;
+    dddiceRuntimeState.visualizerToken = "";
+    dddiceRuntimeState.visualizerRoomSlug = "";
+    dddiceRuntimeState.visualizerThemeId = "";
+    dddiceRuntimeState.visualizerError = "";
+  }
+
+  function syncDddiceVisualizer() {
+    destroyDddiceVisualizer();
+  }
+
+  async function showDddiceRollOnScreen(_roll) {
+    return undefined;
+  }
+
+  function destroyDddiceEngine() {
+    const engine = dddiceRuntimeState.engine;
+    if (!engine) {
+      return;
+    }
+
+    try {
+      engine.disconnect();
+    } catch (_error) {
+      // Ignore disconnect failures during teardown.
+    }
+
+    dddiceRuntimeState.engine = null;
+    dddiceRuntimeState.engineToken = "";
+    dddiceRuntimeState.connectedRoomSlug = "";
+    dddiceRuntimeState.syncPending = false;
+  }
+
+  function syncDddiceEngineRoom(engine) {
+    dddiceRuntimeState.connectedRoomSlug = normalizeDddiceRoomSlug(
+      dddiceUiState.activeRoomSlug
+    );
+  }
+
+  function ensureDddiceEngine() {
+    const sdk = getDddiceSdk();
+    if (!sdk) {
+      throw new Error("DDDice SDK bundle is unavailable.");
+    }
+
+    const token = String(dddiceUiState.authToken || "").trim();
+    if (!token) {
+      throw new Error("Connect a guest session before starting the room client.");
+    }
+
+    if (dddiceRuntimeState.engine && dddiceRuntimeState.engineToken === token) {
+      return dddiceRuntimeState.engine;
+    }
+
+    destroyDddiceEngine();
+
+    const engine = new sdk.ThreeDDiceAPI(token);
+
+    dddiceRuntimeState.engine = engine;
+    dddiceRuntimeState.engineToken = token;
+    syncDddiceEngineRoom(engine);
+    return engine;
+  }
+
+  function handleDddiceDrawerToggle(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    updateDddiceUiState({ expanded: !dddiceUiState.expanded });
+    void saveDddiceLocalState();
+  }
+
+  function handleDddiceDiceButtonClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const diceButton = target.closest(
+      '.dice-rolling-panel button[class*="DiceContainer_button__"]'
+    );
+    if (diceButton instanceof HTMLButtonElement) {
+      if (!canUseDddiceNativeRolls()) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+
+      updateDddiceUiState({ expanded: !dddiceUiState.expanded });
+      void saveDddiceLocalState();
+      return;
+    }
+
+    if (!dddiceUiState.expanded) {
+      return;
+    }
+
+    const roller = getDddiceRollerPanel();
+    if (!(roller instanceof HTMLElement) || roller.contains(target)) {
+      return;
+    }
+
+    updateDddiceUiState({ expanded: false });
+    void saveDddiceLocalState();
+  }
+
+  function handleDddiceDraftInput(event) {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) {
+      return;
+    }
+
+    if (target.dataset.fbDddiceRole === "custom-roll-input") {
+      syncDddiceDrawer(getDddiceDrawer());
+      return;
+    }
+
+    const field = target.dataset.fbDddiceField;
+    if (field !== "draftRoomName" && field !== "draftRoomSlug") {
+      return;
+    }
+
+    updateDddiceUiState({
+      [field]: String(target.value || "").trim(),
+    });
+    void saveDddiceLocalState();
+  }
+
+  function createDddiceSidebarAction() {
+    const section = document.createElement("section");
+    const eyebrow = document.createElement("p");
+    const summary = document.createElement("p");
+    const button = document.createElement("button");
+
+    section.className = DDDICE_SIDEBAR_ACTION_CLASS;
+
+    eyebrow.className = "fb-dddice-sidebar-action__eyebrow";
+    eyebrow.textContent = "Further Beyond";
+
+    summary.className = "fb-dddice-sidebar-action__summary";
+
+    button.type = "button";
+    button.className = "fb-dddice-sidebar-action__button";
+    button.textContent = "Roll in DDDice";
+    button.addEventListener("click", handleDddiceSidebarRollClick);
+
+    section.append(eyebrow, summary, button);
+    return section;
+  }
+
+  function syncDddiceSidebarAction(dialog) {
+    const existingActions = Array.from(
+      document.querySelectorAll(`.${DDDICE_SIDEBAR_ACTION_CLASS}`)
+    );
+    existingActions.forEach((action) => {
+      if (!dialog || action.closest('[role="dialog"]') !== dialog) {
+        action.remove();
+      }
+    });
+
+    if (!getExtensionSettings().dddiceEnabled || !(dialog instanceof HTMLElement)) {
+      return false;
+    }
+
+    const rollDefinition = buildDddiceSidebarRollDefinition(dialog);
+    if (!rollDefinition) {
+      dialog.querySelector(`.${DDDICE_SIDEBAR_ACTION_CLASS}`)?.remove();
+      return false;
+    }
+
+    let action = dialog.querySelector(`.${DDDICE_SIDEBAR_ACTION_CLASS}`);
+    if (!(action instanceof HTMLElement)) {
+      action = createDddiceSidebarAction();
+      dialog.appendChild(action);
+    }
+
+    const summary = action.querySelector(".fb-dddice-sidebar-action__summary");
+    const button = action.querySelector(".fb-dddice-sidebar-action__button");
+    const canRoll =
+      !!dddiceUiState.authToken &&
+      !!dddiceUiState.activeRoomSlug &&
+      !!dddiceUiState.themeId &&
+      dddiceUiState.connectionState !== "connecting";
+
+    if (summary) {
+      summary.textContent = `${rollDefinition.label}: ${rollDefinition.expression}`;
+    }
+
+    if (button instanceof HTMLButtonElement) {
+      button.dataset.fbDddiceExpression = rollDefinition.expression;
+      button.dataset.fbDddiceLabel = rollDefinition.label;
+      button.disabled = !canRoll;
+    }
+
+    return true;
+  }
+
+  async function handleDddiceSidebarRollClick(event) {
+    const button = event.currentTarget;
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      return;
+    }
+
+    const expression = String(button.dataset.fbDddiceExpression || "").trim();
+    const label = String(button.dataset.fbDddiceLabel || "").trim() || "D&D Beyond roll";
+    if (!expression) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+      await submitDddiceRollExpression(expression, label, {
+        showRollerOutput: false,
+      });
+    } catch (error) {
+      console.error("[Further Beyond] DDDice action failed.", error);
+      updateDddiceUiState({
+        connectionState: getDddiceConnectionState(),
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "DDDice action failed.",
+      });
+    }
+  }
+
+  async function handleDddiceIntegratedDiceClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element) || !canUseDddiceNativeRolls()) {
+      return;
+    }
+
+    const button = target.closest("button.integrated-dice__container");
+    const context = getDddiceIntegratedDiceContext(button);
+    if (!context) {
+      return;
+    }
+
+    if (shouldSuppressDddiceNativeDice()) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
+      }
+    }
+
+    try {
+      const metadata = await requestIntegratedDiceMetadata(button);
+      const rollDefinition = buildDddiceIntegratedDiceRollDefinition(
+        button,
+        metadata
+      );
+      if (!rollDefinition) {
+        throw new Error("This D&D Beyond roll is not supported yet.");
+      }
+
+      await submitDddiceRollExpression(rollDefinition.expression, rollDefinition.label, {
+        showRollerOutput: false,
+      });
+    } catch (error) {
+      console.error("[Further Beyond] DDDice action failed.", error);
+      updateDddiceUiState({
+        connectionState: getDddiceConnectionState(),
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "DDDice action failed.",
+      });
+    }
+  }
+
+  function buildDddiceErrorMessage(response, payload) {
+    if (typeof payload?.message === "string" && payload.message.trim()) {
+      return payload.message.trim();
+    }
+
+    if (typeof payload?.error === "string" && payload.error.trim()) {
+      return payload.error.trim();
+    }
+
+    const errorList = Array.isArray(payload?.errors)
+      ? payload.errors
+      : payload?.errors && typeof payload.errors === "object"
+        ? Object.values(payload.errors).flat()
+        : [];
+    const normalizedErrors = errorList
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean);
+
+    if (normalizedErrors.length) {
+      return normalizedErrors.join(" ");
+    }
+
+    return `DDDice request failed (${response.status}).`;
+  }
+
+  async function dddiceApiRequest(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    headers.set("Accept", "application/json");
+
+    if (options.token) {
+      headers.set("Authorization", `Bearer ${options.token}`);
+    }
+
+    if (
+      options.body !== undefined &&
+      options.body !== null &&
+      !headers.has("Content-Type") &&
+      !(options.body instanceof FormData)
+    ) {
+      headers.set("Content-Type", "application/json");
+    }
+
+    let response;
+    try {
+      response = await fetch(`${DDDICE_API_BASE_URL}${path}`, {
+        method: options.method || "GET",
+        body: options.body,
+        headers,
+      });
+    } catch (_error) {
+      throw new Error("Could not reach DDDice.");
+    }
+
+    const contentType = response.headers.get("content-type") || "";
+    const payload = contentType.includes("application/json")
+      ? await response.json().catch(() => null)
+      : null;
+
+    if (!response.ok) {
+      throw new Error(buildDddiceErrorMessage(response, payload));
+    }
+
+    return payload;
+  }
+
+  async function requestDddiceGuestToken() {
+    const response = await dddiceApiRequest("/user", {
+      method: "POST",
+    });
+
+    if (response?.type === "token" && typeof response.data === "string") {
+      return response.data.trim();
+    }
+
+    throw new Error("DDDice did not return a guest token.");
+  }
+
+  async function fetchDddiceCurrentUser(token) {
+    const response = await dddiceApiRequest("/user", {
+      token,
+    });
+    return response?.data || null;
+  }
+
+  async function fetchDddiceDiceBox(token) {
+    const response = await dddiceApiRequest("/dice-box", {
+      token,
+    });
+    return Array.isArray(response?.data) ? response.data : [];
+  }
+
+  async function ensureDddiceRollTheme(token, forceRefresh) {
+    if (dddiceUiState.themeId && !forceRefresh) {
+      return dddiceUiState.themeId;
+    }
+
+    const diceBoxItems = await fetchDddiceDiceBox(token);
+    const themeId = String(diceBoxItems[0]?.id || "").trim();
+
+    if (!themeId) {
+      throw new Error("No DDDice roll theme is available for this user.");
+    }
+
+    updateDddiceUiState({ themeId });
+    await saveDddiceLocalState();
+    return themeId;
+  }
+
+  async function ensureDddiceGuestSession(forceRefresh) {
+    const existingToken = dddiceUiState.authToken;
+    const hasCachedUser = !!(dddiceUiState.userName || dddiceUiState.userId);
+
+    if (existingToken && hasCachedUser && !!dddiceUiState.themeId && !forceRefresh) {
+      updateDddiceUiState({
+        connectionState: getDddiceConnectionState(),
+        statusMessage: "",
+      });
+      return existingToken;
+    }
+
+    updateDddiceUiState({
+      connectionState: "connecting",
+      statusMessage: existingToken
+        ? "Refreshing guest session..."
+        : "Creating guest session...",
+    });
+
+    let token = existingToken;
+    let user = null;
+
+    try {
+      if (!token) {
+        token = await requestDddiceGuestToken();
+      }
+
+      try {
+        user = await fetchDddiceCurrentUser(token);
+      } catch (error) {
+        if (!existingToken) {
+          throw error;
+        }
+
+        token = await requestDddiceGuestToken();
+        user = await fetchDddiceCurrentUser(token);
+      }
+    } catch (error) {
+      updateDddiceUiState({
+        connectionState: "error",
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "Could not create a DDDice guest session.",
+      });
+      throw error;
+    }
+
+    updateDddiceUiState({
+      authToken: token,
+      userName: String(user?.name || "").trim(),
+      userId: String(user?.uuid || "").trim(),
+      themeId: await ensureDddiceRollTheme(token, forceRefresh),
+      connectionState: dddiceUiState.activeRoomSlug ? "connected" : "ready",
+      statusMessage: "",
+    });
+    await saveDddiceLocalState();
+    return token;
+  }
+
+  async function connectDddiceGuestSession() {
+    await ensureDddiceGuestSession(true);
+  }
+
+  async function createDddiceRoom() {
+    const token = await ensureDddiceGuestSession(false);
+    const requestedName = String(dddiceUiState.draftRoomName || "").trim();
+
+    updateDddiceUiState({
+      connectionState: "connecting",
+      statusMessage: requestedName
+        ? `Creating ${requestedName}...`
+        : "Creating room...",
+    });
+
+    const response = await dddiceApiRequest("/room", {
+      method: "POST",
+      token,
+      body: JSON.stringify({
+        is_public: true,
+        ...(requestedName ? { name: requestedName } : {}),
+      }),
+    });
+    const room = normalizeDddiceRoomRecord(response?.data);
+
+    if (!room.slug) {
+      throw new Error("DDDice did not return a room slug.");
+    }
+
+    updateDddiceUiState({
+      activeRoomSlug: room.slug,
+      activeRoomName: room.name || requestedName,
+      draftRoomSlug: room.slug,
+      draftRoomName: room.name || requestedName,
+      connectionState: "connected",
+      statusMessage: room.name
+        ? `Created and joined ${room.name}.`
+        : `Created and joined room ${room.slug}.`,
+    });
+    await saveDddiceLocalState();
+  }
+
+  async function joinDddiceRoom() {
+    const token = await ensureDddiceGuestSession(false);
+    const requestedSlug = normalizeDddiceRoomSlug(dddiceUiState.draftRoomSlug);
+
+    if (!requestedSlug) {
+      throw new Error("Enter a room slug or invite link first.");
+    }
+
+    updateDddiceUiState({
+      connectionState: "connecting",
+      statusMessage: `Joining room ${requestedSlug}...`,
+    });
+
+    const response = await dddiceApiRequest(
+      `/room/${encodeURIComponent(requestedSlug)}/participant`,
+      {
+        method: "POST",
+        token,
+        body: JSON.stringify({}),
+      }
+    );
+    const room = normalizeDddiceRoomRecord(response?.data);
+
+    if (!room.slug) {
+      throw new Error("DDDice did not confirm the joined room.");
+    }
+
+    updateDddiceUiState({
+      activeRoomSlug: room.slug,
+      activeRoomName: room.name || dddiceUiState.draftRoomName,
+      draftRoomSlug: room.slug,
+      draftRoomName: room.name || dddiceUiState.draftRoomName,
+      connectionState: "connected",
+      statusMessage: room.name
+        ? `Joined ${room.name}.`
+        : `Joined room ${room.slug}.`,
+    });
+    await saveDddiceLocalState();
+  }
+
+  function parseDddiceCustomRoll(expression) {
+    const normalizedExpression = String(expression || "").trim();
+    if (!normalizedExpression) {
+      throw new Error("Enter a dice expression first.");
+    }
+
+    const themeId = String(dddiceUiState.themeId || "").trim();
+    if (!themeId) {
+      throw new Error("No DDDice roll theme is available for this user.");
+    }
+
+    const sdk = getDddiceSdk();
+    if (sdk) {
+      try {
+        const parsedRoll = sdk.parseRollEquation(normalizedExpression, themeId);
+        const dice = Array.isArray(parsedRoll?.dice) ? parsedRoll.dice : [];
+
+        if (!dice.length) {
+          throw new Error("Enter a dice expression first.");
+        }
+
+        return {
+          dice,
+          operator:
+            parsedRoll?.operators && typeof parsedRoll.operators === "object"
+              ? parsedRoll.operators
+              : undefined,
+          equation: normalizedExpression,
+        };
+      } catch (error) {
+        throw new Error(
+          error instanceof Error && error.message
+            ? error.message
+            : "Enter a valid DDDice roll expression."
+        );
+      }
+    }
+
+    const rawTerms = normalizedExpression
+      .split("+")
+      .map((term) => term.trim())
+      .filter(Boolean);
+
+    if (!rawTerms.length) {
+      throw new Error("Enter a dice expression first.");
+    }
+
+    const dice = [];
+    const normalizedTerms = [];
+
+    rawTerms.forEach((term) => {
+      const match = /^(\d*)d(4|6|8|10|12|20)$/i.exec(term);
+      if (!match) {
+        throw new Error(
+          "Custom rolls currently support only dice terms like d20 or 2d6 + d8."
+        );
+      }
+
+      const quantity = Number.parseInt(match[1] || "1", 10);
+      const dieType = `d${match[2]}`;
+
+      if (!Number.isInteger(quantity) || quantity <= 0) {
+        throw new Error("Each dice term must use a positive quantity.");
+      }
+
+      if (quantity > 25) {
+        throw new Error("A single custom term cannot exceed 25 dice.");
+      }
+
+      for (let index = 0; index < quantity; index += 1) {
+        dice.push({
+          type: dieType,
+          theme: themeId,
+        });
+      }
+
+      normalizedTerms.push(quantity === 1 ? `1${dieType}` : `${quantity}${dieType}`);
+    });
+
+    if (dice.length > 25) {
+      throw new Error("Custom rolls cannot exceed 25 dice total.");
+    }
+
+    return {
+      dice,
+      equation: normalizedTerms.join("+"),
+    };
+  }
+
+  function appendDddiceCustomRollDie(dieType) {
+    const drawer = getDddiceDrawer();
+    const input = drawer?.querySelector('[data-fb-dddice-role="custom-roll-input"]');
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+
+    const currentValue = String(input.value || "").trim();
+    input.value = currentValue ? `${currentValue} + ${dieType}` : dieType;
+    syncDddiceDrawer(drawer);
+  }
+
+  async function submitDddiceCustomRoll() {
+    const drawer = getDddiceDrawer();
+    const input = drawer?.querySelector('[data-fb-dddice-role="custom-roll-input"]');
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error("Custom roll input is unavailable.");
+    }
+
+    if (!dddiceUiState.activeRoomSlug) {
+      throw new Error("Create or join a room before rolling.");
+    }
+
+    await submitDddiceRollExpression(input.value, "Custom roll");
+
+    input.value = "";
+    syncDddiceDrawer(drawer);
+  }
+
+  async function submitDddiceRollExpression(expression, label, options = {}) {
+    if (!dddiceUiState.activeRoomSlug) {
+      throw new Error("Create or join a room before rolling.");
+    }
+
+    const showRollerOutput = options.showRollerOutput !== false;
+
+    const token = await ensureDddiceGuestSession(false);
+    await ensureDddiceRollTheme(token, false);
+    const parsedRoll = parseDddiceCustomRoll(expression);
+    const engine = ensureDddiceEngine();
+
+    updateDddiceUiState({
+      connectionState: "connecting",
+      statusMessage: `Rolling ${parsedRoll.equation}...`,
+    });
+
+    const response = await engine.roll.create(parsedRoll.dice, {
+      label,
+      room: dddiceUiState.activeRoomSlug,
+      ...(parsedRoll.operator ? { operator: parsedRoll.operator } : {}),
+    });
+    const roll = response?.data || null;
+    const totalValue = Number.isFinite(roll?.total_value)
+      ? ` Total ${roll.total_value}.`
+      : "";
+
+    if (showRollerOutput) {
+      renderDddiceRollOutput(roll);
+    }
+    appendDddiceRollHistory(roll);
+    await showDddiceRollOnScreen(roll);
+
+    updateDddiceUiState({
+      connectionState: "connected",
+      statusMessage: `Rolled ${roll?.equation || parsedRoll.equation}.${totalValue}`,
+    });
+
+    return roll;
+  }
+
+  async function handleDddiceDrawerKeydown(event) {
+    const target = event.target;
+    if (
+      event.key !== "Enter" ||
+      !(target instanceof HTMLInputElement) ||
+      target.dataset.fbDddiceRole !== "custom-roll-input"
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+
+    try {
+      await submitDddiceCustomRoll();
+    } catch (error) {
+      console.error("[Further Beyond] DDDice action failed.", error);
+      updateDddiceUiState({
+        connectionState: getDddiceConnectionState(),
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "DDDice action failed.",
+      });
+    }
+  }
+
+  async function handleDddiceActionClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+
+    const button = target.closest(
+      "[data-fb-dddice-action], [data-fb-dddice-die]"
+    );
+    if (!(button instanceof HTMLButtonElement) || button.disabled) {
+      return;
+    }
+
+    const dieType = button.dataset.fbDddiceDie;
+    if (dieType) {
+      event.preventDefault();
+      event.stopPropagation();
+      appendDddiceCustomRollDie(dieType);
+      return;
+    }
+
+    const action = button.dataset.fbDddiceAction;
+    if (!action) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    try {
+      if (action === "connect-guest") {
+        await connectDddiceGuestSession();
+        return;
+      }
+
+      if (action === "create-room") {
+        await createDddiceRoom();
+        return;
+      }
+
+      if (action === "join-room") {
+        await joinDddiceRoom();
+        return;
+      }
+
+      if (action === "open-3d-room") {
+        const roomUrl = getDddiceRoomUrl(dddiceUiState.activeRoomSlug);
+        if (!roomUrl) {
+          throw new Error("Create or join a room before opening DDDice.");
+        }
+
+        window.open(roomUrl, "_blank", "noopener,noreferrer");
+        return;
+      }
+
+      if (action === "open-settings") {
+        openConfigModal();
+        return;
+      }
+
+      if (action === "close-roller") {
+        updateDddiceUiState({ expanded: false });
+        await saveDddiceLocalState();
+        return;
+      }
+
+      if (action === "roll-custom") {
+        await submitDddiceCustomRoll();
+      }
+    } catch (error) {
+      console.error("[Further Beyond] DDDice action failed.", error);
+      updateDddiceUiState({
+        connectionState: getDddiceConnectionState(),
+        statusMessage:
+          error instanceof Error && error.message
+            ? error.message
+            : "DDDice action failed.",
+      });
+    }
+  }
+
+  function ensureDddiceSidebarAlignedRight() {
+    const sidebar = getDddiceNativeSidebar();
+    if (!(sidebar instanceof HTMLElement)) {
+      return false;
+    }
+
+    const leftButton = sidebar.querySelector('button[aria-label="Align Left"]');
+    const rightButton = sidebar.querySelector('button[aria-label="Align Right"]');
+    const leftIsActive = leftButton?.classList.contains("styles_active__tWFiD");
+    const rightIsActive = rightButton?.classList.contains("styles_active__tWFiD");
+
+    if (!rightIsActive && leftIsActive && rightButton instanceof HTMLButtonElement) {
+      rightButton.click();
+      return true;
+    }
+
+    return rightIsActive;
+  }
+
+  function createDddiceNativePanel() {
+    const panel = document.createElement("section");
+
+    panel.id = DDDICE_NATIVE_PANEL_ID;
+    panel.className = "fb-dddice-log-pane";
+    panel.setAttribute("aria-label", "DDDice log");
+    panel.innerHTML = `
+      <div class="fb-dddice-log__list" data-fb-dddice-role="log-list"></div>
+    `;
+
+    renderDddiceRollHistory();
+    return panel;
+  }
+
+  function createDddiceRollerPanel() {
+    const panel = document.createElement("section");
+
+    panel.id = DDDICE_ROLLER_PANEL_ID;
+    panel.className = "fb-dddice-drawer fb-dddice-drawer--roller";
+    panel.dataset.layout = "roller";
+    panel.setAttribute("aria-label", "DDDice roller");
+    panel.innerHTML = `
+      <div class="fb-dddice-drawer__header">
+        <div class="fb-dddice-drawer__title-block">
+          <p class="fb-dddice-drawer__eyebrow">Further Beyond</p>
+          <h2 class="fb-dddice-drawer__title">DDDice</h2>
+        </div>
+        <div class="fb-dddice-roller__header-actions">
+          <span class="fb-dddice-drawer__state" data-state="idle">Guest mode</span>
+          <button type="button" class="fb-dddice-roller__close" data-fb-dddice-action="close-roller" aria-label="Close DDDice roller">x</button>
+        </div>
+      </div>
+      <div class="fb-dddice-drawer__summary">
+        <span class="fb-dddice-drawer__user" hidden>
+          Guest <strong class="fb-dddice-drawer__user-value"></strong>
+        </span>
+        <span class="fb-dddice-drawer__room" hidden>
+          Room <strong class="fb-dddice-drawer__room-value"></strong>
+        </span>
+      </div>
+      <div class="fb-dddice-drawer__panel">
+        <p class="fb-dddice-drawer__status">
+          <span class="fb-dddice-drawer__status-label">Status</span>
+          <span class="fb-dddice-drawer__status-copy">Guest setup has not started yet.</span>
+        </p>
+        <div class="fb-dddice-drawer__stage fb-dddice-drawer__stage--compact" data-state="idle">
+          <div class="fb-dddice-drawer__roll-output" data-fb-dddice-role="roll-output" aria-live="polite" hidden></div>
+          <p class="fb-dddice-drawer__hint fb-dddice-drawer__stage-copy" data-fb-dddice-role="canvas-status">
+            Connect a guest session from Further Beyond settings to start rolling.
+          </p>
+        </div>
+        <label class="fb-dddice-drawer__field">
+          <span class="fb-dddice-drawer__field-label">Custom roll</span>
+          <input class="fb-dddice-drawer__input" data-fb-dddice-role="custom-roll-input" type="text" placeholder="d20 + 2d6" />
+        </label>
+        <div class="fb-dddice-drawer__dice-row" aria-label="Quick add dice">
+          <button type="button" data-fb-dddice-die="d4">d4</button>
+          <button type="button" data-fb-dddice-die="d6">d6</button>
+          <button type="button" data-fb-dddice-die="d8">d8</button>
+          <button type="button" data-fb-dddice-die="d10">d10</button>
+          <button type="button" data-fb-dddice-die="d12">d12</button>
+          <button type="button" data-fb-dddice-die="d20">d20</button>
+        </div>
+        <div class="fb-dddice-drawer__actions">
+          <button type="button" data-fb-dddice-action="open-settings">Open settings</button>
+          <button type="button" data-fb-dddice-action="open-3d-room">View 3D room</button>
+          <button type="button" data-fb-dddice-action="roll-custom">Roll custom</button>
+        </div>
+      </div>
+    `;
+
+    panel.addEventListener("input", handleDddiceDraftInput);
+    panel.addEventListener("click", handleDddiceActionClick);
+    panel.addEventListener("keydown", handleDddiceDrawerKeydown);
+
+    syncDddiceDrawer(panel);
+    return panel;
+  }
+
+  function removeDddiceNativePanel() {
+    getDddiceNativePanel()?.remove();
+  }
+
+  function removeDddiceRollerPanel() {
+    getDddiceRollerPanel()?.remove();
+  }
+
+  function mountDddiceNativePanel() {
+    const gameLogPane = getDddiceGameLogPane();
+    const gameLogButton = getDddiceGameLogButton();
+
+    if (!(gameLogButton instanceof HTMLElement) || !(gameLogPane instanceof HTMLElement)) {
+      removeDddiceNativePanel();
+      resetDddiceSidebarLayout();
+      return false;
+    }
+
+    ensureDddiceSidebarAlignedRight();
+    document.body.classList.add(DDDICE_SIDEBAR_LAYOUT_BODY_CLASS);
+
+    let panel = getDddiceNativePanel();
+    if (!(panel instanceof HTMLElement)) {
+      panel = createDddiceNativePanel();
+    }
+
+    if (panel.parentElement !== gameLogPane) {
+      gameLogPane.replaceChildren(panel);
+    }
+
+    renderDddiceRollHistory();
+    return true;
+  }
+
+  function mountDddiceRollerPanel() {
+    if (!dddiceUiState.expanded) {
+      removeDddiceRollerPanel();
+      return false;
+    }
+
+    const diceButton = getDddiceDiceButton();
+    if (!(diceButton instanceof HTMLButtonElement)) {
+      removeDddiceRollerPanel();
+      return false;
+    }
+
+    let panel = getDddiceRollerPanel();
+    if (!(panel instanceof HTMLElement)) {
+      panel = createDddiceRollerPanel();
+    }
+
+    if (panel.parentElement !== document.body) {
+      document.body.appendChild(panel);
+    }
+
+    syncDddiceDrawer(panel);
+    return true;
+  }
+
+  function createDddiceDrawer() {
+    const drawer = document.createElement("aside");
+
+    drawer.id = DDDICE_DRAWER_ID;
+    drawer.className = "fb-dddice-drawer";
+    drawer.dataset.layout = "floating";
+    drawer.setAttribute("aria-label", "DDDice panel");
+    drawer.innerHTML = `
+      <div class="fb-dddice-drawer__header">
+        <div class="fb-dddice-drawer__title-block">
+          <p class="fb-dddice-drawer__eyebrow">Further Beyond</p>
+          <h2 class="fb-dddice-drawer__title">DDDice</h2>
+        </div>
+        <button type="button" class="fb-dddice-drawer__toggle" aria-expanded="false">
+          <span class="fb-dddice-drawer__toggle-copy">Open</span>
+        </button>
+      </div>
+      <div class="fb-dddice-drawer__summary">
+        <span class="fb-dddice-drawer__state" data-state="idle">Guest mode</span>
+        <span class="fb-dddice-drawer__user" hidden>
+          Guest <strong class="fb-dddice-drawer__user-value"></strong>
+        </span>
+        <span class="fb-dddice-drawer__room" hidden>
+          Room <strong class="fb-dddice-drawer__room-value"></strong>
+        </span>
+      </div>
+      <div class="fb-dddice-drawer__panel" hidden>
+        <p class="fb-dddice-drawer__status">
+          <span class="fb-dddice-drawer__status-label">Status</span>
+          <span class="fb-dddice-drawer__status-copy">Guest setup has not started yet.</span>
+        </p>
+        <div class="fb-dddice-drawer__stage" data-state="idle">
+          <canvas
+            class="fb-dddice-drawer__canvas"
+            data-fb-dddice-role="canvas"
+            width="296"
+            height="180"
+            aria-label="DDDice tray"
+          ></canvas>
+          <div class="fb-dddice-drawer__roll-output" data-fb-dddice-role="roll-output" aria-live="polite" hidden></div>
+          <p class="fb-dddice-drawer__hint fb-dddice-drawer__stage-copy" data-fb-dddice-role="canvas-status">
+            Connect a guest session to start the live dice tray.
+          </p>
+        </div>
+        <label class="fb-dddice-drawer__field">
+          <span class="fb-dddice-drawer__field-label">Room name</span>
+          <input class="fb-dddice-drawer__input" data-fb-dddice-field="draftRoomName" type="text" placeholder="Campaign Table" />
+        </label>
+        <label class="fb-dddice-drawer__field">
+          <span class="fb-dddice-drawer__field-label">Room slug or invite</span>
+          <input class="fb-dddice-drawer__input" data-fb-dddice-field="draftRoomSlug" type="text" placeholder="abc123 or room link" />
+        </label>
+        <div class="fb-dddice-drawer__actions">
+          <button type="button" data-fb-dddice-action="connect-guest">Connect guest</button>
+          <button type="button" data-fb-dddice-action="create-room">Create room</button>
+          <button type="button" data-fb-dddice-action="join-room">Join room</button>
+        </div>
+        <label class="fb-dddice-drawer__field">
+          <span class="fb-dddice-drawer__field-label">Custom roll</span>
+          <input class="fb-dddice-drawer__input" data-fb-dddice-role="custom-roll-input" type="text" placeholder="d20 + 2d6" />
+        </label>
+        <div class="fb-dddice-drawer__dice-row" aria-label="Quick add dice">
+          <button type="button" data-fb-dddice-die="d4">d4</button>
+          <button type="button" data-fb-dddice-die="d6">d6</button>
+          <button type="button" data-fb-dddice-die="d8">d8</button>
+          <button type="button" data-fb-dddice-die="d10">d10</button>
+          <button type="button" data-fb-dddice-die="d12">d12</button>
+          <button type="button" data-fb-dddice-die="d20">d20</button>
+        </div>
+        <div class="fb-dddice-drawer__actions fb-dddice-drawer__actions--secondary">
+          <button type="button" data-fb-dddice-action="open-3d-room">View 3D room</button>
+          <button type="button" data-fb-dddice-action="roll-custom">Roll custom</button>
+        </div>
+        <p class="fb-dddice-drawer__hint">
+          Custom rolls post directly into the selected DDDice room. Use View 3D room for the full DDDice table without recreating the unstable in-page WebGL renderer.
+        </p>
+      </div>
+    `;
+
+    drawer
+      .querySelector(".fb-dddice-drawer__toggle")
+      ?.addEventListener("click", handleDddiceDrawerToggle);
+    drawer.addEventListener("input", handleDddiceDraftInput);
+    drawer.addEventListener("click", handleDddiceActionClick);
+    drawer.addEventListener("keydown", handleDddiceDrawerKeydown);
+
+    syncDddiceDrawer(drawer);
+    return drawer;
+  }
+
+  function mountDddiceDrawer() {
+    getDddiceDrawerDock()?.remove();
+    resetDddiceSidebarLayout();
+
+    if (!getExtensionSettings().dddiceEnabled) {
+      destroyDddiceVisualizer();
+      destroyDddiceEngine();
+      removeDddiceNativePanel();
+      removeDddiceRollerPanel();
+      getDddiceDrawer()?.remove();
+      const dock = getDddiceDrawerDock();
+      if (dock instanceof HTMLElement) {
+        unwrapDddiceDrawerDock(dock);
+      }
+      return false;
+    }
+
+    const standaloneDrawer = document.getElementById(DDDICE_DRAWER_ID);
+    if (standaloneDrawer instanceof HTMLElement) {
+      standaloneDrawer.remove();
+    }
+
+    const logMounted = mountDddiceNativePanel();
+    const rollerMounted = mountDddiceRollerPanel();
+
+    if (!logMounted) {
+      removeDddiceNativePanel();
+    }
+
+    if (!rollerMounted) {
+      removeDddiceRollerPanel();
+    }
+
+    return logMounted || rollerMounted;
+  }
+
   function setConfigStatus(message, state) {
     const modal = getConfigModal();
     const status = modal?.querySelector(".fb-config-modal__status");
@@ -273,6 +2900,10 @@
     const shortRestHitDiceEnabled = modal.querySelector(
       "#fb-settings-short-rest-hit-dice-enabled"
     );
+    const dddiceEnabled = modal.querySelector("#fb-settings-dddice-enabled");
+    const dddiceSuppressNativeDice = modal.querySelector(
+      "#fb-settings-dddice-suppress-native-dice"
+    );
 
     if (itemSlotsEnabled) {
       itemSlotsEnabled.checked = !!settings.itemSlotsEnabled;
@@ -290,7 +2921,16 @@
       shortRestHitDiceEnabled.checked = !!settings.shortRestHitDiceEnabled;
     }
 
+    if (dddiceEnabled) {
+      dddiceEnabled.checked = !!settings.dddiceEnabled;
+    }
+
+    if (dddiceSuppressNativeDice) {
+      dddiceSuppressNativeDice.checked = !!settings.dddiceSuppressNativeDice;
+    }
+
     updateConfigFormDisabledState(settings);
+    syncDddiceConfigPanel();
   }
 
   function readConfigFormSettings() {
@@ -308,6 +2948,12 @@
       shortRestHitDiceEnabled:
         modal?.querySelector("#fb-settings-short-rest-hit-dice-enabled")
           ?.checked ?? DEFAULT_EXTENSION_SETTINGS.shortRestHitDiceEnabled,
+      dddiceEnabled:
+        modal?.querySelector("#fb-settings-dddice-enabled")?.checked ??
+        DEFAULT_EXTENSION_SETTINGS.dddiceEnabled,
+      dddiceSuppressNativeDice:
+        modal?.querySelector("#fb-settings-dddice-suppress-native-dice")
+          ?.checked ?? DEFAULT_EXTENSION_SETTINGS.dddiceSuppressNativeDice,
     });
   }
 
@@ -410,13 +3056,73 @@
               <input id="fb-settings-short-rest-hit-dice-enabled" type="checkbox" />
             </label>
           </section>
+          <section class="fb-config-modal__card">
+            <label class="fb-config-modal__toggle" for="fb-settings-dddice-enabled">
+              <span class="fb-config-modal__copy">
+                <span class="fb-config-modal__label">DDDice dice replacement</span>
+                <span class="fb-config-modal__description">Starts the DDDice integration on supported character-sheet roll targets and shows the Further Beyond roll tray.</span>
+              </span>
+              <input id="fb-settings-dddice-enabled" type="checkbox" />
+            </label>
+          </section>
+          <section class="fb-config-modal__card">
+            <label class="fb-config-modal__toggle" for="fb-settings-dddice-suppress-native-dice">
+              <span class="fb-config-modal__copy">
+                <span class="fb-config-modal__label">Only show DDDice rolls</span>
+                <span class="fb-config-modal__description">When Further Beyond handles a supported native roll button, stop D&amp;D Beyond's own dice from triggering.</span>
+              </span>
+              <input id="fb-settings-dddice-suppress-native-dice" type="checkbox" />
+            </label>
+          </section>
         </form>
+        <section class="fb-config-modal__card fb-config-modal__dddice-panel" data-fb-dddice-role="config-panel">
+          <div class="fb-config-modal__section-header">
+            <div>
+              <p class="fb-config-modal__eyebrow">DDDice</p>
+              <h3 class="fb-config-modal__section-title">Room and Session</h3>
+            </div>
+            <span class="fb-dddice-drawer__state" data-state="idle">Guest mode</span>
+          </div>
+          <div class="fb-dddice-drawer__summary">
+            <span class="fb-dddice-drawer__user" hidden>
+              Guest <strong class="fb-dddice-drawer__user-value"></strong>
+            </span>
+            <span class="fb-dddice-drawer__room" hidden>
+              Room <strong class="fb-dddice-drawer__room-value"></strong>
+            </span>
+          </div>
+          <p class="fb-dddice-drawer__status">
+            <span class="fb-dddice-drawer__status-label">Status</span>
+            <span class="fb-dddice-drawer__status-copy">Guest setup has not started yet.</span>
+          </p>
+          <p class="fb-config-modal__hint" data-fb-dddice-role="config-hint">
+            Use D&amp;D Beyond's bottom-left dice button to open the DDDice custom roller.
+          </p>
+          <label class="fb-dddice-drawer__field">
+            <span class="fb-dddice-drawer__field-label">Room name</span>
+            <input class="fb-dddice-drawer__input" data-fb-dddice-field="draftRoomName" type="text" placeholder="Campaign Table" />
+          </label>
+          <label class="fb-dddice-drawer__field">
+            <span class="fb-dddice-drawer__field-label">Room slug or invite</span>
+            <input class="fb-dddice-drawer__input" data-fb-dddice-field="draftRoomSlug" type="text" placeholder="abc123 or room link" />
+          </label>
+          <div class="fb-dddice-drawer__actions">
+            <button type="button" data-fb-dddice-action="connect-guest">Connect guest</button>
+            <button type="button" data-fb-dddice-action="create-room">Create room</button>
+            <button type="button" data-fb-dddice-action="join-room">Join room</button>
+          </div>
+          <div class="fb-dddice-drawer__actions fb-dddice-drawer__actions--secondary">
+            <button type="button" data-fb-dddice-action="open-3d-room">View 3D room</button>
+          </div>
+        </section>
         <p class="fb-config-modal__status" role="status" aria-live="polite"></p>
       </div>
     `;
 
     modal.addEventListener("click", handleConfigModalClick);
     modal.addEventListener("keydown", handleConfigModalKeydown);
+    modal.addEventListener("input", handleDddiceDraftInput);
+    modal.addEventListener("click", handleDddiceActionClick);
     modal.querySelector(".fb-config-modal__form")?.addEventListener(
       "change",
       handleConfigFormChange
@@ -985,6 +3691,8 @@
         DEFAULT_EXTENSION_SETTINGS.coinsPerSlot
       ),
       shortRestHitDiceEnabled: value?.shortRestHitDiceEnabled !== false,
+      dddiceEnabled: value?.dddiceEnabled === true,
+      dddiceSuppressNativeDice: value?.dddiceSuppressNativeDice !== false,
     };
   }
 
@@ -1556,6 +4264,91 @@
       handleShortRestBridgeResponse
     );
     pageBridgeState.shortRestListenerBound = true;
+  }
+
+  function handleIntegratedDiceBridgeResponse(event) {
+    const detail = event.detail || {};
+    const pending = pageBridgeState.pendingIntegratedDiceRequests.get(
+      detail.requestId
+    );
+    if (!pending) {
+      return;
+    }
+
+    window.clearTimeout(pending.timeoutId);
+    pageBridgeState.pendingIntegratedDiceRequests.delete(detail.requestId);
+    pending.cleanup();
+
+    if (detail.ok) {
+      pending.resolve(detail.metadata || null);
+      return;
+    }
+
+    pending.reject(
+      new Error(detail.error || "The integrated dice bridge failed.")
+    );
+  }
+
+  function ensureIntegratedDiceBridgeListener() {
+    if (pageBridgeState.integratedDiceListenerBound) {
+      return;
+    }
+
+    window.addEventListener(
+      INTEGRATED_DICE_RESPONSE_EVENT,
+      handleIntegratedDiceBridgeResponse
+    );
+    pageBridgeState.integratedDiceListenerBound = true;
+  }
+
+  async function requestIntegratedDiceMetadata(button) {
+    if (!(button instanceof HTMLButtonElement)) {
+      return null;
+    }
+
+    ensureIntegratedDiceBridgeListener();
+    await ensurePageBridge();
+
+    return new Promise((resolve, reject) => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const targetToken = `${requestId}-${Math.random().toString(36).slice(2, 8)}`;
+      const previousToken = button.dataset.fbDddiceTarget || "";
+      const cleanup = () => {
+        if (button.dataset.fbDddiceTarget !== targetToken) {
+          return;
+        }
+
+        if (previousToken) {
+          button.dataset.fbDddiceTarget = previousToken;
+        } else {
+          delete button.dataset.fbDddiceTarget;
+        }
+      };
+
+      button.dataset.fbDddiceTarget = targetToken;
+
+      const timeoutId = window.setTimeout(() => {
+        pageBridgeState.pendingIntegratedDiceRequests.delete(requestId);
+        cleanup();
+        reject(new Error("The integrated dice bridge timed out."));
+      }, 3000);
+
+      pageBridgeState.pendingIntegratedDiceRequests.set(requestId, {
+        resolve,
+        reject,
+        timeoutId,
+        cleanup,
+      });
+
+      window.dispatchEvent(
+        new CustomEvent(INTEGRATED_DICE_REQUEST_EVENT, {
+          detail: {
+            requestId,
+            targetToken,
+          },
+        })
+      );
+    });
   }
 
   async function requestShortRestBridge(action, hitDiceUsed) {
@@ -2139,6 +4932,9 @@
     refreshPending = false;
     mountIndicator();
     await ensureExtensionSettingsLoaded();
+    await ensureDddiceLocalStateLoaded();
+    mountDddiceDrawer();
+    syncDddiceSidebarAction(findDddiceInfoSidebar());
     mountConfigTrigger();
     await mountShortRestUseHitDieAction();
     await mountInventorySlots();
@@ -2161,6 +4957,14 @@
 
   scheduleRefresh();
   observer.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", handleDddiceIntegratedDiceClick, true);
+  document.addEventListener("click", handleDddiceDiceButtonClick, true);
+  window.addEventListener("resize", scheduleDddiceDrawerPlacement, {
+    passive: true,
+  });
+  window.addEventListener("scroll", scheduleDddiceDrawerPlacement, {
+    passive: true,
+  });
 
   window.addEventListener(
     "pagehide",
@@ -2178,12 +4982,24 @@
           handleShortRestBridgeResponse
         );
       }
+      destroyDddiceVisualizer();
+      destroyDddiceEngine();
+      if (pageBridgeState.integratedDiceListenerBound) {
+        window.removeEventListener(
+          INTEGRATED_DICE_RESPONSE_EVENT,
+          handleIntegratedDiceBridgeResponse
+        );
+      }
       if (
         extensionSettingsState.listenerBound &&
         chrome?.storage?.onChanged?.removeListener
       ) {
         chrome.storage.onChanged.removeListener(handleExtensionSettingsChange);
       }
+      document.removeEventListener("click", handleDddiceIntegratedDiceClick, true);
+      document.removeEventListener("click", handleDddiceDiceButtonClick, true);
+      window.removeEventListener("resize", scheduleDddiceDrawerPlacement);
+      window.removeEventListener("scroll", scheduleDddiceDrawerPlacement);
       window.clearTimeout(settingsStatusTimeoutId);
       window.clearTimeout(shortRestStatusTimeoutId);
     },

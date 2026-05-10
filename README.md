@@ -7,6 +7,7 @@ A Chrome extension that adds a small active indicator, an in-page Further Beyond
 - Shows a small Further Beyond icon immediately to the left of the character name.
 - Clicking the Further Beyond toolbar icon opens a settings popup for enabled features.
 - Adds a `FURTHER BEYOND` action next to `MANAGE` on character pages and opens an in-page settings window.
+- Adds an optional DDDice integration that keeps roll history in D&D Beyond's native Game Log, moves room/session setup into the Further Beyond menu, and uses D&D Beyond's dice button for a custom DDDice roller.
 - Adds a `Use Hit Die` action to the Short Rest sidebar so selected hit dice can be saved without taking a full short rest.
 - Only runs on D&D Beyond character pages under `https://www.dndbeyond.com/characters/*`.
 - Tracks inventory slots on the Inventory page.
@@ -29,7 +30,14 @@ A Chrome extension that adds a small active indicator, an in-page Further Beyond
 
 ## Development
 
-The extension is built with plain HTML, CSS, and JavaScript, so you can load it unpacked directly during development.
+The page UI is still plain HTML, CSS, and JavaScript, but the DDDice SDK is bundled locally for the content script.
+
+```powershell
+npm install
+npm run build:sdk
+```
+
+After that bundle exists, you can load the repo unpacked in Chrome during development.
 
 ## Packaging
 
@@ -39,7 +47,9 @@ To create a distributable zip for Chrome, run the PowerShell build script from t
 .\build.ps1
 ```
 
-This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.33.zip`.
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.42.zip`.
+
+The build script also refreshes the local DDDice SDK bundle before packaging.
 
 ```
 further-beyond/

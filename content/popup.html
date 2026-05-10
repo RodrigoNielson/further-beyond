@@ -82,6 +82,34 @@
             />
           </label>
         </section>
+
+        <section class="setting-card">
+          <label class="setting-toggle" for="dddice-enabled">
+            <span class="setting-copy">
+              <span class="setting-title">DDDice dice replacement</span>
+              <span class="setting-description">
+                Starts the DDDice integration on supported character-sheet roll
+                targets and shows the Further Beyond roll tray.
+              </span>
+            </span>
+            <input id="dddice-enabled" name="dddiceEnabled" type="checkbox" />
+          </label>
+
+          <label class="setting-toggle" for="dddice-suppress-native-dice">
+            <span class="setting-copy">
+              <span class="setting-title">Only show DDDice rolls</span>
+              <span class="setting-description">
+                When Further Beyond handles a supported native roll button,
+                stop D&amp;D Beyond's own dice from triggering.
+              </span>
+            </span>
+            <input
+              id="dddice-suppress-native-dice"
+              name="dddiceSuppressNativeDice"
+              type="checkbox"
+            />
+          </label>
+        </section>
       </form>
 
       <p class="popup__status" id="status" role="status" aria-live="polite"></p>
