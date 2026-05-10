@@ -47,7 +47,7 @@ To create a distributable zip for Chrome, run the PowerShell build script from t
 .\build.ps1
 ```
 
-This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.42.zip`.
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.47.zip`.
 
 The build script also refreshes the local DDDice SDK bundle before packaging.
 

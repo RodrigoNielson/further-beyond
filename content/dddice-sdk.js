@@ -28934,7 +28934,9 @@ ${e2.fragmentShader}
 
   // src/dddice-sdk.js
   globalThis.__fbDddiceSdk = {
+    ThreeDDice: yI,
     ThreeDDiceAPI: _i,
+    ThreeDDiceRollEvent: ui,
     parseRollEquation: wI
   };
 })();
