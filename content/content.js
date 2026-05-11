@@ -7,6 +7,9 @@
   "use strict";
 
   if (!window.location.pathname.startsWith("/characters/")) return;
+  if (window.__fbContentScriptInstalled) return;
+
+  window.__fbContentScriptInstalled = true;
 
   const INDICATOR_ID = "fb-active-indicator";
   const CONTAINER_BADGE_CLASS = "fb-container-slot-badge";
@@ -21,11 +24,14 @@
   const DDDICE_NATIVE_PANEL_ID = "fb-dddice-native-panel";
   const DDDICE_ROLLER_PANEL_ID = "fb-dddice-roller-panel";
   const DDDICE_SCREEN_TRAY_ID = "fb-dddice-screen-tray";
+  const DDDICE_NOTIFICATION_ID = "fb-dddice-notification";
   const DDDICE_DRAWER_DOCK_CLASS = "fb-dddice-dock";
   const DDDICE_SIDEBAR_LAYOUT_BODY_CLASS = "fb-dddice-sidebar-layout";
   const DDDICE_SIDEBAR_ACTION_CLASS = "fb-dddice-sidebar-action";
   const DDDICE_ROLL_HISTORY_LIMIT = 24;
   const DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS = 2;
+  const DDDICE_NOTIFICATION_DURATION_MS = 1600;
+  const DDDICE_NOTIFICATION_FADE_MS = 220;
   const PAGE_BRIDGE_SCRIPT_ID = "fb-page-bridge";
   const INVENTORY_REQUEST_EVENT = "fb:inventory-request";
   const INVENTORY_RESPONSE_EVENT = "fb:inventory-response";
@@ -151,7 +157,6 @@
     syncPending: false,
     visualizer: null,
     visualizerToken: "",
-    visualizerRoomSlug: "",
     visualizerThemeId: "",
     visualizerError: "",
     visualizerWarmupTimerId: null,
@@ -159,12 +164,13 @@
     themeOptionsPromise: null,
     accountActivationSecret: "",
     accountActivationPollTimeoutId: null,
-    suppressedRolls: [],
   };
 
   let refreshPending = false;
   let dddiceDrawerPlacementPending = false;
   let dddiceScreenTrayTimeoutId = null;
+  let dddiceNotificationTimeoutId = null;
+  let dddiceNotificationFadeTimeoutId = null;
   let settingsStatusTimeoutId = null;
   let shortRestStatusTimeoutId = null;
 
@@ -364,6 +370,10 @@
     return document.getElementById(DDDICE_SCREEN_TRAY_ID);
   }
 
+  function getDddiceNotification() {
+    return document.getElementById(DDDICE_NOTIFICATION_ID);
+  }
+
   function getDddiceConfigPanel() {
     const panel = getDddiceConfigModal()?.querySelector('[data-fb-dddice-role="config-panel"]');
     return panel instanceof HTMLElement ? panel : null;
@@ -420,6 +430,11 @@
   function getDddiceGameLogPane() {
     const pane = document.querySelector('[data-testid="gamelog-pane"]');
     return pane instanceof HTMLElement ? pane : null;
+  }
+
+  function isDddiceGameLogOpen() {
+    const pane = getDddiceGameLogPane();
+    return pane instanceof HTMLElement && isElementVisible(pane);
   }
 
   function getDddiceNativeSidebar() {
@@ -1438,6 +1453,97 @@
     }, "");
   }
 
+  function createDddiceNotification() {
+    const notification = document.createElement("aside");
+    notification.id = DDDICE_NOTIFICATION_ID;
+    notification.className = "fb-dddice-notification";
+    notification.hidden = true;
+    notification.setAttribute("role", "status");
+    notification.setAttribute("aria-live", "polite");
+    notification.innerHTML = `
+      <div class="fb-dddice-notification__eyebrow">DDDice</div>
+      <strong class="fb-dddice-notification__title"></strong>
+      <div class="fb-dddice-notification__summary"></div>
+      <div class="fb-dddice-notification__total"></div>
+    `;
+    return notification;
+  }
+
+  function ensureDddiceNotification() {
+    let notification = getDddiceNotification();
+    if (!(notification instanceof HTMLElement)) {
+      notification = createDddiceNotification();
+      document.body.appendChild(notification);
+    }
+
+    return notification;
+  }
+
+  function hideDddiceNotification() {
+    const notification = getDddiceNotification();
+    if (!(notification instanceof HTMLElement)) {
+      return;
+    }
+
+    window.clearTimeout(dddiceNotificationTimeoutId);
+    window.clearTimeout(dddiceNotificationFadeTimeoutId);
+    dddiceNotificationTimeoutId = null;
+    dddiceNotificationFadeTimeoutId = null;
+
+    notification.classList.remove("is-visible", "is-fading");
+    notification.hidden = true;
+  }
+
+  function showDddiceRollNotification(entry) {
+    if (!entry || typeof entry !== "object" || isDddiceGameLogOpen()) {
+      hideDddiceNotification();
+      return;
+    }
+
+    const notification = ensureDddiceNotification();
+    const title = notification.querySelector(".fb-dddice-notification__title");
+    const summary = notification.querySelector(".fb-dddice-notification__summary");
+    const total = notification.querySelector(".fb-dddice-notification__total");
+    const labelParts = splitDddiceRollHistoryLabel(entry.label);
+    const summaryText =
+      formatDddiceRollValueSummary(entry.values) || entry.equation || "Roll";
+
+    if (title instanceof HTMLElement) {
+      title.textContent = labelParts.accent
+        ? `${labelParts.title} ${labelParts.accent}`
+        : labelParts.title;
+    }
+
+    if (summary instanceof HTMLElement) {
+      summary.textContent = summaryText;
+    }
+
+    if (total instanceof HTMLElement) {
+      total.textContent = entry.total ? `Total ${entry.total}` : "";
+      total.hidden = !entry.total;
+    }
+
+    window.clearTimeout(dddiceNotificationTimeoutId);
+    window.clearTimeout(dddiceNotificationFadeTimeoutId);
+    dddiceNotificationTimeoutId = null;
+    dddiceNotificationFadeTimeoutId = null;
+
+    notification.hidden = false;
+    notification.classList.remove("is-fading");
+
+    window.requestAnimationFrame(() => {
+      notification.classList.add("is-visible");
+    });
+
+    dddiceNotificationTimeoutId = window.setTimeout(() => {
+      notification.classList.add("is-fading");
+      notification.classList.remove("is-visible");
+      dddiceNotificationFadeTimeoutId = window.setTimeout(() => {
+        hideDddiceNotification();
+      }, DDDICE_NOTIFICATION_FADE_MS);
+    }, DDDICE_NOTIFICATION_DURATION_MS);
+  }
+
   function renderDddiceRollHistory() {
     const logList = getDddiceNativePanel()?.querySelector(
       '[data-fb-dddice-role="log-list"]'
@@ -1576,6 +1682,7 @@
 
     renderDddiceRollHistory();
     scrollDddiceRollHistoryToBottom();
+    showDddiceRollNotification(entry);
     void saveDddiceLocalState();
   }
 
@@ -1651,8 +1758,14 @@
 
     const target = getDddiceScreenTrayBoundsTarget();
     const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null;
+    const left = rect ? Math.max(0, Math.min(window.innerWidth, rect.left)) : 0;
+    const top = rect ? Math.max(0, Math.min(window.innerHeight, rect.top)) : 0;
+    const right = rect ? Math.max(left, Math.min(window.innerWidth, rect.right)) : 0;
+    const bottom = rect ? Math.max(top, Math.min(window.innerHeight, rect.bottom)) : 0;
+    const width = Math.round(right - left);
+    const height = Math.round(bottom - top);
 
-    if (!rect || rect.width < 240 || rect.height < 240) {
+    if (!rect || width < 240 || height < 240) {
       tray.hidden = true;
       tray.style.removeProperty("--fb-dddice-screen-left");
       tray.style.removeProperty("--fb-dddice-screen-top");
@@ -1662,10 +1775,10 @@
     }
 
     tray.hidden = false;
-    tray.style.setProperty("--fb-dddice-screen-left", `${Math.round(rect.left)}px`);
-    tray.style.setProperty("--fb-dddice-screen-top", `${Math.round(rect.top)}px`);
-    tray.style.setProperty("--fb-dddice-screen-width", `${Math.round(rect.width)}px`);
-    tray.style.setProperty("--fb-dddice-screen-height", `${Math.round(rect.height)}px`);
+    tray.style.setProperty("--fb-dddice-screen-left", `${left}px`);
+    tray.style.setProperty("--fb-dddice-screen-top", `${top}px`);
+    tray.style.setProperty("--fb-dddice-screen-width", `${width}px`);
+    tray.style.setProperty("--fb-dddice-screen-height", `${height}px`);
   }
 
   function syncDddiceScreenTray(tray = getDddiceScreenTray()) {
@@ -2181,105 +2294,6 @@
     return `fb-dddice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   }
 
-  function getDddiceRollValueSignature(rollValue) {
-    if (!rollValue || typeof rollValue !== "object") {
-      return "";
-    }
-
-    return [
-      String(rollValue.type || "").trim(),
-      String(rollValue.theme || "").trim(),
-      Number.isFinite(Number(rollValue.value)) ? String(Number(rollValue.value)) : "",
-      String(rollValue.value_to_display ?? "").trim(),
-      rollValue.is_hidden ? "1" : "0",
-      rollValue.is_dropped ? "1" : "0",
-    ].join(":");
-  }
-
-  function getDddiceRollSignature(roll) {
-    if (!roll || typeof roll !== "object") {
-      return "";
-    }
-
-    const valuesSignature = Array.isArray(roll.values)
-      ? roll.values.map(getDddiceRollValueSignature).join("|")
-      : "";
-
-    return [
-      String(roll.equation || "").trim(),
-      String(roll.user?.uuid || "").trim(),
-      valuesSignature,
-    ].join("::");
-  }
-
-  function pruneSuppressedDddiceRolls(now = Date.now()) {
-    dddiceRuntimeState.suppressedRolls = dddiceRuntimeState.suppressedRolls.filter(
-      (entry) => entry.expiresAt > now
-    );
-  }
-
-  function queueSuppressedDddiceRoll(roll, lifetimeMs = 5000) {
-    const signature = getDddiceRollSignature(roll);
-    if (!signature) {
-      return;
-    }
-
-    pruneSuppressedDddiceRolls();
-    dddiceRuntimeState.suppressedRolls.push({
-      signature,
-      expiresAt: Date.now() + lifetimeMs,
-    });
-  }
-
-  function unqueueSuppressedDddiceRoll(roll) {
-    const signature = getDddiceRollSignature(roll);
-    if (!signature) {
-      return;
-    }
-
-    dddiceRuntimeState.suppressedRolls = dddiceRuntimeState.suppressedRolls.filter(
-      (entry) => entry.signature !== signature
-    );
-  }
-
-  function shouldSuppressDddiceRollEvent(roll) {
-    const signature = getDddiceRollSignature(roll);
-    if (!signature) {
-      return false;
-    }
-
-    pruneSuppressedDddiceRolls();
-
-    const entryIndex = dddiceRuntimeState.suppressedRolls.findIndex(
-      (entry) => entry.signature === signature
-    );
-    if (entryIndex < 0) {
-      return false;
-    }
-
-    dddiceRuntimeState.suppressedRolls.splice(entryIndex, 1);
-    return true;
-  }
-
-  function installDddiceVisualizerEventFilter(visualizer) {
-    if (!visualizer || visualizer.__fbRollFilterInstalled) {
-      return;
-    }
-
-    const originalEventRollCreated = visualizer.eventRollCreated;
-    if (typeof originalEventRollCreated === "function") {
-      visualizer.eventRollCreated = (roll, addedDice = []) => {
-        if (shouldSuppressDddiceRollEvent(roll)) {
-          return;
-        }
-
-        return originalEventRollCreated.call(visualizer, roll, addedDice);
-      };
-    }
-
-    visualizer.__fbRollFilterInstalled = true;
-  }
-
   function createDddiceImmediateRoll(visualizer, parsedRoll, label) {
     if (!visualizer || typeof visualizer.getThemeOptions !== "function") {
       throw new Error("The DDDice 3D renderer is unavailable.");
@@ -2438,7 +2452,6 @@
     const visualizer = dddiceRuntimeState.visualizer;
     const canvas = getDddiceCanvas(drawer);
     const token = String(dddiceUiState.authToken || "").trim();
-    const roomSlug = normalizeDddiceRoomSlug(dddiceUiState.activeRoomSlug);
     const themeId = String(dddiceUiState.themeId || "").trim();
 
     return !!(
@@ -2446,7 +2459,6 @@
       canvas instanceof HTMLCanvasElement &&
       visualizer.canvas === canvas &&
       dddiceRuntimeState.visualizerToken === token &&
-      dddiceRuntimeState.visualizerRoomSlug === roomSlug &&
       dddiceRuntimeState.visualizerThemeId === themeId
     );
   }
@@ -2562,7 +2574,6 @@
     }
 
     if (canReuseDddiceVisualizer(drawer)) {
-      installDddiceVisualizerEventFilter(dddiceRuntimeState.visualizer);
       if (dddiceRuntimeState.visualizer?.config) {
         dddiceRuntimeState.visualizer.config.autoClear = DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS;
       }
@@ -2582,13 +2593,11 @@
     const visualizerApi = visualizer.api || new sdk.ThreeDDiceAPI(token);
 
     visualizer.api = visualizerApi;
-    installDddiceVisualizerEventFilter(visualizer);
     if (visualizer.config) {
       visualizer.config.autoClear = DDDICE_VISUALIZER_AUTO_CLEAR_SECONDS;
     }
     resizeDddiceVisualizer(visualizer, canvas);
     visualizer.start();
-    visualizer.connect(roomSlug);
 
     const themeResponse = await visualizerApi.theme.get(themeId);
     const theme = themeResponse?.data || null;
@@ -2601,7 +2610,6 @@
 
     dddiceRuntimeState.visualizer = visualizer;
     dddiceRuntimeState.visualizerToken = token;
-    dddiceRuntimeState.visualizerRoomSlug = roomSlug;
     dddiceRuntimeState.visualizerThemeId = themeId;
     dddiceRuntimeState.visualizerError = "";
 
@@ -2657,6 +2665,78 @@
     }
   }
 
+  async function clearDddiceVisualizerDice(visualizer) {
+    if (!visualizer) {
+      return;
+    }
+
+    const clearDeadline = Date.now() + 3000;
+    while (visualizer.isDiceThrowing && Date.now() < clearDeadline) {
+      await new Promise((resolve) => {
+        window.setTimeout(resolve, 50);
+      });
+    }
+
+    if (typeof visualizer.clear === "function") {
+      visualizer.clear();
+      const removeDeadline = Date.now() + 500;
+      while (
+        visualizer.dice instanceof Map &&
+        visualizer.dice.size > 0 &&
+        Date.now() < removeDeadline
+      ) {
+        await waitForNextAnimationFrame();
+      }
+
+      if (!(visualizer.dice instanceof Map) || visualizer.dice.size === 0) {
+        return;
+      }
+    }
+
+    if (visualizer.dice instanceof Map && typeof visualizer.removeDieByUuid === "function") {
+      Array.from(visualizer.dice.keys()).forEach((uuid) => {
+        visualizer.removeDieByUuid(uuid);
+      });
+    }
+  }
+
+  async function executeDddiceVisualizerRoll(visualizer, roll) {
+    if (!visualizer || !roll || typeof roll !== "object") {
+      throw new Error("The DDDice 3D renderer is unavailable.");
+    }
+
+    const themeIds = Array.from(
+      new Set(
+        (Array.isArray(roll.values) ? roll.values : [])
+          .map((value) => String(value?.theme || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    for (const themeId of themeIds) {
+      await ensureDddiceThemeResourcesLoaded(visualizer, themeId);
+    }
+
+    await clearDddiceVisualizerDice(visualizer);
+
+    if (typeof visualizer.executeRoll === "function") {
+      await visualizer.executeRoll(roll);
+      return;
+    }
+
+    if (typeof visualizer.eventRollCreated === "function") {
+      visualizer.eventRollCreated(roll);
+      return;
+    }
+
+    const rollCreatedEvent = getDddiceSdk()?.ThreeDDiceRollEvent?.RollCreated;
+    if (!rollCreatedEvent) {
+      throw new Error("The local DDDice roll event bridge is unavailable.");
+    }
+
+    visualizer.dispatch(rollCreatedEvent, roll);
+  }
+
   function destroyDddiceVisualizer(errorMessage = "") {
     if (dddiceRuntimeState.visualizerWarmupTimerId !== null) {
       window.clearTimeout(dddiceRuntimeState.visualizerWarmupTimerId);
@@ -2680,7 +2760,6 @@
 
     dddiceRuntimeState.visualizer = null;
     dddiceRuntimeState.visualizerToken = "";
-    dddiceRuntimeState.visualizerRoomSlug = "";
     dddiceRuntimeState.visualizerThemeId = "";
     dddiceRuntimeState.visualizerError = errorMessage;
   }
@@ -2759,13 +2838,7 @@
 
     try {
       const visualizer = await ensureDddiceVisualizer(host);
-      const rollCreatedEvent = getDddiceSdk()?.ThreeDDiceRollEvent?.RollCreated;
-
-      if (!rollCreatedEvent) {
-        throw new Error("The local DDDice roll event bridge is unavailable.");
-      }
-
-      visualizer.dispatch(rollCreatedEvent, roll);
+      await executeDddiceVisualizerRoll(visualizer, roll);
 
       dddiceRuntimeState.visualizerError = "";
       hideDddiceRollOutput(host);
@@ -3727,15 +3800,8 @@
             dddiceRuntimeState.visualizerThemeId || dddiceUiState.themeId
           );
           immediateRoll = createDddiceImmediateRoll(visualizer, rollPayload, label);
-          const rollCreatedEvent = getDddiceSdk()?.ThreeDDiceRollEvent?.RollCreated;
-
-          if (!rollCreatedEvent) {
-            throw new Error("The local DDDice roll event bridge is unavailable.");
-          }
-
-          visualizer.dispatch(rollCreatedEvent, immediateRoll);
-          queueSuppressedDddiceRoll(immediateRoll);
           hideDddiceRollOutput(tray);
+          await executeDddiceVisualizerRoll(visualizer, immediateRoll);
           dddiceRuntimeState.visualizerError = "";
 
           const engine = ensureDddiceEngine();
@@ -3762,11 +3828,8 @@
             }));
           }
 
-            usedVisualizerRoll = true;
+          usedVisualizerRoll = true;
         } catch (error) {
-          if (immediateRoll) {
-            unqueueSuppressedDddiceRoll(immediateRoll);
-          }
           console.warn("[Further Beyond] Falling back to API roll after tray roll failed.", error);
         }
       }
@@ -4110,6 +4173,7 @@
       gameLogPane.replaceChildren(panel);
     }
 
+    hideDddiceNotification();
     renderDddiceRollHistory();
     return true;
   }
@@ -6545,6 +6609,7 @@
   window.addEventListener(
     "pagehide",
     () => {
+      delete window.__fbContentScriptInstalled;
       observer.disconnect();
       if (pageBridgeState.listenerBound) {
         window.removeEventListener(
