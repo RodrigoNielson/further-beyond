@@ -15,6 +15,8 @@
   const SPEED_WARNING_ID = "fb-speed-warning";
   const CONFIG_TRIGGER_ID = "fb-config-trigger";
   const CONFIG_MODAL_ID = "fb-config-modal";
+  const DDDICE_CONFIG_TRIGGER_ID = "fb-dddice-config-trigger";
+  const DDDICE_CONFIG_MODAL_ID = "fb-dddice-config-modal";
   const DDDICE_DRAWER_ID = "fb-dddice-drawer";
   const DDDICE_NATIVE_PANEL_ID = "fb-dddice-native-panel";
   const DDDICE_ROLLER_PANEL_ID = "fb-dddice-roller-panel";
@@ -245,19 +247,26 @@
     openConfigModal();
   }
 
-  function createConfigTrigger(manageButton) {
+  function handleDddiceConfigTriggerClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    openDddiceConfigModal();
+  }
+
+  function createHeaderTrigger(manageButton, options) {
     const tagName = manageButton?.tagName?.toLowerCase() === "a" ? "a" : "button";
     const trigger = document.createElement(tagName);
     const content = document.createElement("span");
     const label = document.createElement("span");
 
-    trigger.id = CONFIG_TRIGGER_ID;
+    trigger.id = options.id;
     trigger.className = manageButton?.className || "";
     trigger.dataset.fbConfigTrigger = "true";
     trigger.setAttribute("aria-haspopup", "dialog");
-    trigger.setAttribute("aria-controls", CONFIG_MODAL_ID);
+    trigger.setAttribute("aria-controls", options.modalId);
     trigger.setAttribute("aria-expanded", "false");
-    trigger.title = "Open Further Beyond settings";
+    trigger.title = options.title;
+    trigger.setAttribute("aria-label", options.ariaLabel || options.title);
 
     if (tagName === "button") {
       trigger.type = "button";
@@ -269,13 +278,35 @@
     content.className = "fb-config-trigger__content";
 
     label.className = "fb-config-trigger__label";
-    label.textContent = "FURTHER BEYOND";
+    label.textContent = options.label;
 
     content.appendChild(label);
     trigger.replaceChildren(content);
-    trigger.addEventListener("click", handleConfigTriggerClick);
+    trigger.addEventListener("click", options.onClick);
 
     return trigger;
+  }
+
+  function createConfigTrigger(manageButton) {
+    return createHeaderTrigger(manageButton, {
+      id: CONFIG_TRIGGER_ID,
+      modalId: CONFIG_MODAL_ID,
+      title: "Open Further Beyond settings",
+      ariaLabel: "Open Further Beyond settings",
+      label: "Further Beyond",
+      onClick: handleConfigTriggerClick,
+    });
+  }
+
+  function createDddiceConfigTrigger(manageButton) {
+    return createHeaderTrigger(manageButton, {
+      id: DDDICE_CONFIG_TRIGGER_ID,
+      modalId: DDDICE_CONFIG_MODAL_ID,
+      title: "Open DDDice settings",
+      ariaLabel: "Open DDDice settings",
+      label: "DDDice",
+      onClick: handleDddiceConfigTriggerClick,
+    });
   }
 
   function mountConfigTrigger() {
@@ -289,8 +320,17 @@
       trigger = createConfigTrigger(manageButton);
     }
 
+    let dddiceTrigger = document.getElementById(DDDICE_CONFIG_TRIGGER_ID);
+    if (!dddiceTrigger) {
+      dddiceTrigger = createDddiceConfigTrigger(manageButton);
+    }
+
     if (trigger.previousElementSibling !== manageButton) {
       manageButton.insertAdjacentElement("afterend", trigger);
+    }
+
+    if (dddiceTrigger.previousElementSibling !== trigger) {
+      trigger.insertAdjacentElement("afterend", dddiceTrigger);
     }
 
     return true;
@@ -298,6 +338,14 @@
 
   function getConfigModal() {
     return document.getElementById(CONFIG_MODAL_ID);
+  }
+
+  function getDddiceConfigTrigger() {
+    return document.getElementById(DDDICE_CONFIG_TRIGGER_ID);
+  }
+
+  function getDddiceConfigModal() {
+    return document.getElementById(DDDICE_CONFIG_MODAL_ID);
   }
 
   function getDddiceDrawer() {
@@ -317,7 +365,7 @@
   }
 
   function getDddiceConfigPanel() {
-    const panel = getConfigModal()?.querySelector('[data-fb-dddice-role="config-panel"]');
+    const panel = getDddiceConfigModal()?.querySelector('[data-fb-dddice-role="config-panel"]');
     return panel instanceof HTMLElement ? panel : null;
   }
 
@@ -3862,7 +3910,7 @@
       }
 
       if (action === "open-settings") {
-        openConfigModal();
+        openDddiceConfigModal();
         return;
       }
 
@@ -4223,8 +4271,7 @@
     return logMounted || rollerMounted;
   }
 
-  function setConfigStatus(message, state) {
-    const modal = getConfigModal();
+  function setConfigStatus(message, state, modal = getConfigModal()) {
     const status = modal?.querySelector(".fb-config-modal__status");
     if (!status) {
       return;
@@ -4247,8 +4294,7 @@
     }
   }
 
-  function updateConfigFormDisabledState(settings) {
-    const modal = getConfigModal();
+  function updateConfigFormDisabledState(settings, modal = getConfigModal()) {
     if (!modal) {
       return;
     }
@@ -4274,101 +4320,133 @@
 
   function syncConfigForm(settings) {
     const modal = getConfigModal();
-    if (!modal) {
-      return;
+    const dddiceModal = getDddiceConfigModal();
+
+    if (modal) {
+      const itemSlotsEnabled = modal.querySelector("#fb-settings-item-slots-enabled");
+      const coinsHaveWeight = modal.querySelector("#fb-settings-coins-have-weight");
+      const coinsPerSlot = modal.querySelector("#fb-settings-coins-per-slot");
+      const shortRestHitDiceEnabled = modal.querySelector(
+        "#fb-settings-short-rest-hit-dice-enabled"
+      );
+
+      if (itemSlotsEnabled) {
+        itemSlotsEnabled.checked = !!settings.itemSlotsEnabled;
+      }
+
+      if (coinsHaveWeight) {
+        coinsHaveWeight.checked = !!settings.coinsHaveWeight;
+      }
+
+      if (coinsPerSlot) {
+        coinsPerSlot.value = String(settings.coinsPerSlot);
+      }
+
+      if (shortRestHitDiceEnabled) {
+        shortRestHitDiceEnabled.checked = !!settings.shortRestHitDiceEnabled;
+      }
+
+      updateConfigFormDisabledState(settings, modal);
     }
 
-    const itemSlotsEnabled = modal.querySelector("#fb-settings-item-slots-enabled");
-    const coinsHaveWeight = modal.querySelector("#fb-settings-coins-have-weight");
-    const coinsPerSlot = modal.querySelector("#fb-settings-coins-per-slot");
-    const shortRestHitDiceEnabled = modal.querySelector(
-      "#fb-settings-short-rest-hit-dice-enabled"
-    );
-    const dddiceEnabled = modal.querySelector("#fb-settings-dddice-enabled");
-    const dddiceSuppressNativeDice = modal.querySelector(
-      "#fb-settings-dddice-suppress-native-dice"
-    );
+    if (dddiceModal) {
+      const dddiceEnabled = dddiceModal.querySelector("#fb-settings-dddice-enabled");
+      const dddiceSuppressNativeDice = dddiceModal.querySelector(
+        "#fb-settings-dddice-suppress-native-dice"
+      );
 
-    if (itemSlotsEnabled) {
-      itemSlotsEnabled.checked = !!settings.itemSlotsEnabled;
+      if (dddiceEnabled) {
+        dddiceEnabled.checked = !!settings.dddiceEnabled;
+      }
+
+      if (dddiceSuppressNativeDice) {
+        dddiceSuppressNativeDice.checked = !!settings.dddiceSuppressNativeDice;
+      }
     }
 
-    if (coinsHaveWeight) {
-      coinsHaveWeight.checked = !!settings.coinsHaveWeight;
-    }
-
-    if (coinsPerSlot) {
-      coinsPerSlot.value = String(settings.coinsPerSlot);
-    }
-
-    if (shortRestHitDiceEnabled) {
-      shortRestHitDiceEnabled.checked = !!settings.shortRestHitDiceEnabled;
-    }
-
-    if (dddiceEnabled) {
-      dddiceEnabled.checked = !!settings.dddiceEnabled;
-    }
-
-    if (dddiceSuppressNativeDice) {
-      dddiceSuppressNativeDice.checked = !!settings.dddiceSuppressNativeDice;
-    }
-
-    updateConfigFormDisabledState(settings);
     syncDddiceConfigPanel();
   }
 
   function readConfigFormSettings() {
     const modal = getConfigModal();
+    const dddiceModal = getDddiceConfigModal();
+    const settings = getExtensionSettings();
+
     return normalizeExtensionSettings({
       itemSlotsEnabled:
         modal?.querySelector("#fb-settings-item-slots-enabled")?.checked ??
-        DEFAULT_EXTENSION_SETTINGS.itemSlotsEnabled,
+        settings.itemSlotsEnabled,
       coinsHaveWeight:
         modal?.querySelector("#fb-settings-coins-have-weight")?.checked ??
-        DEFAULT_EXTENSION_SETTINGS.coinsHaveWeight,
+        settings.coinsHaveWeight,
       coinsPerSlot:
         modal?.querySelector("#fb-settings-coins-per-slot")?.value ??
-        DEFAULT_EXTENSION_SETTINGS.coinsPerSlot,
+        settings.coinsPerSlot,
       shortRestHitDiceEnabled:
         modal?.querySelector("#fb-settings-short-rest-hit-dice-enabled")
-          ?.checked ?? DEFAULT_EXTENSION_SETTINGS.shortRestHitDiceEnabled,
+          ?.checked ?? settings.shortRestHitDiceEnabled,
       dddiceEnabled:
-        modal?.querySelector("#fb-settings-dddice-enabled")?.checked ??
-        DEFAULT_EXTENSION_SETTINGS.dddiceEnabled,
+        dddiceModal?.querySelector("#fb-settings-dddice-enabled")?.checked ??
+        settings.dddiceEnabled,
       dddiceSuppressNativeDice:
-        modal?.querySelector("#fb-settings-dddice-suppress-native-dice")
-          ?.checked ?? DEFAULT_EXTENSION_SETTINGS.dddiceSuppressNativeDice,
+        dddiceModal?.querySelector("#fb-settings-dddice-suppress-native-dice")
+          ?.checked ?? settings.dddiceSuppressNativeDice,
     });
   }
 
-  async function handleConfigFormChange() {
+  async function handleConfigFormChange(event) {
     const settings = readConfigFormSettings();
+    const modal = event?.currentTarget?.closest(".fb-config-modal") || getConfigModal();
     syncConfigForm(settings);
 
     try {
       await saveExtensionSettings(settings);
-      setConfigStatus("Saved.", "ok");
+      setConfigStatus("Saved.", "ok", modal);
       scheduleRefresh();
     } catch (error) {
       console.error("[Further Beyond] Could not save extension settings.", error);
-      setConfigStatus("Could not save settings.", "error");
+      setConfigStatus("Could not save settings.", "error", modal);
       syncConfigForm(getExtensionSettings());
     }
   }
 
-  function closeConfigModal() {
-    const modal = getConfigModal();
-    const trigger = document.getElementById(CONFIG_TRIGGER_ID);
-    if (!modal) {
+  function getConfigTriggerForModal(modal) {
+    const modalId = modal instanceof HTMLElement ? modal.id : String(modal || "").trim();
+
+    if (modalId === CONFIG_MODAL_ID) {
+      return document.getElementById(CONFIG_TRIGGER_ID);
+    }
+
+    if (modalId === DDDICE_CONFIG_MODAL_ID) {
+      return getDddiceConfigTrigger();
+    }
+
+    return null;
+  }
+
+  function syncConfigModalOpenState() {
+    const hasOpenModal = [getConfigModal(), getDddiceConfigModal()].some(
+      (modal) => modal instanceof HTMLElement && !modal.hidden
+    );
+
+    document.body.classList.toggle("fb-config-modal-open", hasOpenModal);
+  }
+
+  function closeConfigModal(modal = getConfigModal(), options = {}) {
+    if (!(modal instanceof HTMLElement)) {
       return;
     }
 
     modal.hidden = true;
-    document.body.classList.remove("fb-config-modal-open");
+    syncConfigModalOpenState();
 
+    const trigger = getConfigTriggerForModal(modal);
     if (trigger) {
       trigger.setAttribute("aria-expanded", "false");
-      trigger.focus();
+
+      if (options.focusTrigger !== false) {
+        trigger.focus();
+      }
     }
   }
 
@@ -4382,14 +4460,14 @@
       target.matches("[data-fb-config-close='true']") ||
       target.classList.contains("fb-config-modal")
     ) {
-      closeConfigModal();
+      closeConfigModal(event.currentTarget);
     }
   }
 
   function handleConfigModalKeydown(event) {
     if (event.key === "Escape") {
       event.preventDefault();
-      closeConfigModal();
+      closeConfigModal(event.currentTarget);
     }
   }
 
@@ -4440,6 +4518,50 @@
               <input id="fb-settings-short-rest-hit-dice-enabled" type="checkbox" />
             </label>
           </section>
+        </form>
+        <p class="fb-config-modal__status" role="status" aria-live="polite"></p>
+      </div>
+    `;
+
+    modal.addEventListener("click", handleConfigModalClick);
+    modal.addEventListener("keydown", handleConfigModalKeydown);
+    modal.addEventListener("input", handleDddiceDraftInput);
+    modal.addEventListener("change", handleDddiceDraftInput);
+    modal.addEventListener("click", handleDddiceActionClick);
+    modal.querySelector(".fb-config-modal__form")?.addEventListener(
+      "change",
+      handleConfigFormChange
+    );
+
+    return modal;
+  }
+
+  function ensureConfigModal() {
+    let modal = getConfigModal();
+    if (!modal) {
+      modal = createConfigModal();
+      document.body.appendChild(modal);
+    }
+
+    syncConfigForm(getExtensionSettings());
+    return modal;
+  }
+
+  function createDddiceConfigModal() {
+    const modal = document.createElement("div");
+
+    modal.id = DDDICE_CONFIG_MODAL_ID;
+    modal.className = "fb-config-modal";
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="fb-config-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="fb-dddice-config-modal-title" tabindex="-1">
+        <button type="button" class="fb-config-modal__close" data-fb-config-close="true" aria-label="Close DDDice settings">x</button>
+        <header class="fb-config-modal__header">
+          <p class="fb-config-modal__eyebrow">DDDice</p>
+          <h2 id="fb-dddice-config-modal-title">Integration Settings</h2>
+          <p class="fb-config-modal__intro">Changes save automatically and apply immediately.</p>
+        </header>
+        <form class="fb-config-modal__form">
           <section class="fb-config-modal__card">
             <label class="fb-config-modal__toggle" for="fb-settings-dddice-enabled">
               <span class="fb-config-modal__copy">
@@ -4535,10 +4657,10 @@
     return modal;
   }
 
-  function ensureConfigModal() {
-    let modal = getConfigModal();
+  function ensureDddiceConfigModal() {
+    let modal = getDddiceConfigModal();
     if (!modal) {
-      modal = createConfigModal();
+      modal = createDddiceConfigModal();
       document.body.appendChild(modal);
     }
 
@@ -4547,15 +4669,42 @@
   }
 
   function openConfigModal() {
+    closeConfigModal(getDddiceConfigModal(), { focusTrigger: false });
+
     const modal = ensureConfigModal();
     const dialog = modal.querySelector(".fb-config-modal__dialog");
     const firstField = modal.querySelector("#fb-settings-item-slots-enabled");
 
     syncConfigForm(getExtensionSettings());
-    setConfigStatus("", "");
+    setConfigStatus("", "", modal);
     modal.hidden = false;
-    document.body.classList.add("fb-config-modal-open");
+    syncConfigModalOpenState();
     document.getElementById(CONFIG_TRIGGER_ID)?.setAttribute("aria-expanded", "true");
+
+    window.requestAnimationFrame(() => {
+      if (firstField instanceof HTMLElement) {
+        firstField.focus();
+        return;
+      }
+
+      if (dialog instanceof HTMLElement) {
+        dialog.focus();
+      }
+    });
+  }
+
+  function openDddiceConfigModal() {
+    closeConfigModal(getConfigModal(), { focusTrigger: false });
+
+    const modal = ensureDddiceConfigModal();
+    const dialog = modal.querySelector(".fb-config-modal__dialog");
+    const firstField = modal.querySelector("#fb-settings-dddice-enabled");
+
+    syncConfigForm(getExtensionSettings());
+    setConfigStatus("", "", modal);
+    modal.hidden = false;
+    syncConfigModalOpenState();
+    getDddiceConfigTrigger()?.setAttribute("aria-expanded", "true");
 
     if (dddiceUiState.authToken) {
       void ensureDddiceThemeOptions(dddiceUiState.authToken, true).catch((error) => {
@@ -4564,7 +4713,8 @@
           error instanceof Error && error.message
             ? error.message
             : "Could not load DDDice dice skins.",
-          "error"
+          "error",
+          modal
         );
       });
     }

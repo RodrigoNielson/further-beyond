@@ -25,9 +25,15 @@
   margin-left: 8px;
 }
 
+#fb-dddice-config-trigger {
+  margin-left: 4px;
+  min-width: 41px;
+}
+
 .fb-config-trigger__content {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
 }
 
 .fb-config-trigger__label {
