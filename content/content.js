@@ -24,6 +24,7 @@
   const DICE_NATIVE_PANEL_ID = "fb-dice-native-panel";
   const DICE_ROLLER_PANEL_ID = "fb-dice-roller-panel";
   const DICE_SCREEN_TRAY_ID = "fb-dice-screen-tray";
+  const DICE_SCREEN_TRAY_SCENE_ID = "fb-dice-screen-tray-scene";
   const DICE_NOTIFICATION_STACK_ID = "fb-dice-notification-stack";
   const DICE_DRAWER_DOCK_CLASS = "fb-dice-dock";
   const DICE_SIDEBAR_LAYOUT_BODY_CLASS = "fb-dice-sidebar-layout";
@@ -151,7 +152,11 @@
     engineToken: "",
     connectedRoomSlug: "",
     syncPending: false,
+    rollPresentationQueue: Promise.resolve(),
     visualizer: null,
+    visualizerLoadPromise: null,
+    visualizerRollToken: 0,
+    visualizerRollCompleteHandler: null,
     visualizerToken: "",
     visualizerThemeId: "",
     visualizerError: "",
@@ -365,6 +370,11 @@
     return document.getElementById(DICE_SCREEN_TRAY_ID);
   }
 
+  function getDiceVisualizerSurface(host = getDiceVisualizerHost()) {
+    const surface = host?.querySelector('[data-fb-dice-role="visualizer"]');
+    return surface instanceof HTMLElement ? surface : null;
+  }
+
   function getDiceNotificationStack() {
     return document.getElementById(DICE_NOTIFICATION_STACK_ID);
   }
@@ -410,10 +420,6 @@
     }
 
     return getDiceScreenTray() || getDiceRollerPanel() || getDiceDrawer();
-  }
-
-  function getDiceCanvas(host = getDiceVisualizerHost()) {
-    return host?.querySelector('[data-fb-dice-role="canvas"]') || null;
   }
 
   function getDiceGameLogButton() {
@@ -467,6 +473,16 @@
     }
 
     return sdk;
+  }
+
+  function getDiceVisualizerFactory() {
+    const sdk = getDiceSdk();
+
+    if (!sdk || typeof sdk.DiceBox !== "function") {
+      return null;
+    }
+
+    return sdk.DiceBox;
   }
 
   function normalizeDiceRoomSlug(value) {
@@ -1144,7 +1160,11 @@
       return "Local Further Dice Roller bundle is unavailable.";
     }
 
-    return "Simple rolls are ready. Results appear in the Game Log below.";
+    if (!getDiceVisualizerFactory()) {
+      return "3D dice tray is unavailable. Results still appear in the Game Log below.";
+    }
+
+    return "Simple rolls are ready. Predetermined 3D dice also appear on the screen tray.";
   }
 
   function formatDiceRollTotalValue(totalValue) {
@@ -1639,7 +1659,7 @@
 
   function syncDiceScreenTrayPlacement(tray = getDiceScreenTray()) {
     if (!(tray instanceof HTMLElement)) {
-      return;
+      return false;
     }
 
     const target = getDiceScreenTrayBoundsTarget();
@@ -1652,27 +1672,27 @@
     const height = Math.round(bottom - top);
 
     if (!rect || width < 240 || height < 240) {
-      tray.hidden = true;
+      tray.setAttribute("aria-hidden", "true");
       tray.style.removeProperty("--fb-dice-screen-left");
       tray.style.removeProperty("--fb-dice-screen-top");
       tray.style.removeProperty("--fb-dice-screen-width");
       tray.style.removeProperty("--fb-dice-screen-height");
-      return;
+      return false;
     }
 
-    tray.hidden = false;
     tray.style.setProperty("--fb-dice-screen-left", `${left}px`);
     tray.style.setProperty("--fb-dice-screen-top", `${top}px`);
     tray.style.setProperty("--fb-dice-screen-width", `${width}px`);
     tray.style.setProperty("--fb-dice-screen-height", `${height}px`);
+    return true;
   }
 
   function syncDiceScreenTray(tray = getDiceScreenTray()) {
     if (!(tray instanceof HTMLElement)) {
-      return;
+      return false;
     }
 
-    syncDiceScreenTrayPlacement(tray);
+    return syncDiceScreenTrayPlacement(tray);
   }
 
   function hideDiceScreenTray() {
@@ -1684,16 +1704,148 @@
       return;
     }
 
-    tray.remove();
+    tray.hidden = true;
+    tray.setAttribute("aria-hidden", "true");
+    hideDiceRollOutput(tray);
   }
 
   function scheduleHideDiceScreenTray() {
     window.clearTimeout(diceScreenTrayTimeoutId);
-    diceScreenTrayTimeoutId = null;
+    diceScreenTrayTimeoutId = window.setTimeout(() => {
+      hideDiceScreenTray();
+    }, DICE_VISUALIZER_AUTO_CLEAR_SECONDS * 1000);
   }
 
   function showDiceScreenTray() {
-    return mountDiceScreenTray() ? getDiceScreenTray() : null;
+    const tray = mountDiceScreenTray() ? getDiceScreenTray() : null;
+    if (!(tray instanceof HTMLElement) || !syncDiceScreenTray(tray)) {
+      return null;
+    }
+
+    window.clearTimeout(diceScreenTrayTimeoutId);
+    diceScreenTrayTimeoutId = null;
+    tray.hidden = false;
+    tray.setAttribute("aria-hidden", "false");
+    syncDiceVisualizer(tray);
+    return tray;
+  }
+
+  function buildDiceVisualizerNotation(parsedRoll, roll) {
+    const equation = String(parsedRoll?.equation || roll?.equation || "").trim();
+    if (!equation) {
+      return "";
+    }
+
+    const diceValues = Array.isArray(roll?.values)
+      ? roll.values
+          .filter(
+            (value) =>
+              value &&
+              typeof value === "object" &&
+              value.type !== "mod" &&
+              !value.is_dropped &&
+              !value.is_cleared
+          )
+          .map((value) => Math.abs(Number.parseInt(String(value.value ?? 0), 10)))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      : [];
+
+    return diceValues.length ? `${equation}@${diceValues.join(",")}` : "";
+  }
+
+  async function playDiceVisualizerRoll(roll, parsedRoll, options = {}) {
+    const onComplete =
+      typeof options.onComplete === "function" ? options.onComplete : null;
+    const notation = buildDiceVisualizerNotation(parsedRoll, roll);
+    if (!notation) {
+      return false;
+    }
+
+    const tray = showDiceScreenTray();
+    if (!(tray instanceof HTMLElement)) {
+      return false;
+    }
+
+    const rollToken = diceRuntimeState.visualizerRollToken + 1;
+    diceRuntimeState.visualizerRollToken = rollToken;
+
+    try {
+      await waitForNextAnimationFrame();
+      const visualizer = await ensureDiceVisualizer(tray);
+      if (!visualizer) {
+        hideDiceScreenTray();
+        return false;
+      }
+
+      let completionHandled = false;
+      const runCompletion = (result) => {
+        if (completionHandled || !onComplete) {
+          return;
+        }
+
+        completionHandled = true;
+        onComplete(result);
+      };
+
+      diceRuntimeState.visualizerRollCompleteHandler = onComplete
+        ? (result) => {
+            if (diceRuntimeState.visualizerRollToken !== rollToken) {
+              return;
+            }
+
+            runCompletion(result);
+          }
+        : null;
+
+      hideDiceRollOutput(tray);
+      await visualizer.roll(notation);
+
+      if (diceRuntimeState.visualizerRollToken === rollToken) {
+        runCompletion();
+        diceRuntimeState.visualizerRollCompleteHandler = null;
+        scheduleHideDiceScreenTray();
+      }
+
+      return true;
+    } catch (error) {
+      if (diceRuntimeState.visualizerRollToken === rollToken) {
+        diceRuntimeState.visualizerRollCompleteHandler = null;
+        diceRuntimeState.visualizerError = getDiceVisualizerErrorMessage(error);
+        hideDiceScreenTray();
+      }
+      console.warn("[Further Beyond] Could not render 3D dice.", error);
+      return false;
+    }
+  }
+
+  function queueDiceRollPresentation(roll, parsedRoll, options = {}) {
+    const show3dTray = options.show3dTray !== false;
+    const runPresentation = async () => {
+      let didPresentRoll = false;
+      const presentRoll = () => {
+        if (didPresentRoll) {
+          return;
+        }
+
+        didPresentRoll = true;
+        appendDiceRollHistory(roll);
+      };
+
+      if (show3dTray) {
+        await playDiceVisualizerRoll(roll, parsedRoll, {
+          onComplete: presentRoll,
+        });
+      }
+
+      presentRoll();
+    };
+
+    const queuedPresentation = diceRuntimeState.rollPresentationQueue
+      .catch(() => {})
+      .then(runPresentation);
+
+    diceRuntimeState.rollPresentationQueue = queuedPresentation.catch(() => {});
+    return queuedPresentation;
   }
 
   function syncDiceStage(drawer, hasSdk, hasSession, hasRoom) {
@@ -1831,7 +1983,7 @@
 
     if (configHint instanceof HTMLElement) {
       configHint.textContent =
-        "Use D&D Beyond's bottom-left dice button to open Further Dice Roller. Simple rolls post directly into the Game Log.";
+        "Use D&D Beyond's bottom-left dice button to open Further Dice Roller. Simple rolls animate on the 3D tray and post directly into the Game Log.";
     }
   }
 
@@ -1844,13 +1996,6 @@
     syncDiceConfigPanel();
     syncDiceSidebarAction(findDiceInfoSidebar());
 
-    if (
-      String(diceUiState.authToken || "").trim() &&
-      normalizeDiceRoomSlug(diceUiState.activeRoomSlug) &&
-      String(diceUiState.themeId || "").trim()
-    ) {
-      scheduleDiceVisualizerWarmup(getDiceScreenTray());
-    }
   }
 
   function createDicePreviewUuid() {
@@ -1859,29 +2004,6 @@
     }
 
     return `fb-dice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-
-  function applyDiceRollTheme(parsedRoll, themeId) {
-    const normalizedThemeId = String(themeId || "").trim();
-    if (!parsedRoll || typeof parsedRoll !== "object" || !normalizedThemeId) {
-      return parsedRoll;
-    }
-
-    return {
-      ...parsedRoll,
-      dice: Array.isArray(parsedRoll.dice)
-        ? parsedRoll.dice.map((die) => {
-          if (!die || typeof die !== "object" || die.type === "mod") {
-            return die;
-          }
-
-          return {
-            ...die,
-            theme: normalizedThemeId,
-          };
-        })
-        : [],
-    };
   }
 
   function getDiceVisualizerErrorMessage(error) {
@@ -1894,29 +2016,25 @@
 
   function canReuseDiceVisualizer(drawer = getDiceVisualizerHost()) {
     const visualizer = diceRuntimeState.visualizer;
-    const canvas = getDiceCanvas(drawer);
-    const token = String(diceUiState.authToken || "").trim();
-    const themeId = String(diceUiState.themeId || "").trim();
+    const surface = getDiceVisualizerSurface(drawer);
 
     return !!(
       visualizer &&
-      canvas instanceof HTMLCanvasElement &&
-      visualizer.canvas === canvas &&
-      diceRuntimeState.visualizerToken === token &&
-      diceRuntimeState.visualizerThemeId === themeId
+      surface instanceof HTMLElement &&
+      visualizer.container === surface
     );
   }
 
-  function getDiceVisualizerSize(canvas) {
-    if (!(canvas instanceof HTMLCanvasElement)) {
+  function getDiceVisualizerSize(surface) {
+    if (!(surface instanceof HTMLElement)) {
       return {
         width: 296,
         height: 152,
       };
     }
 
-    const stage = canvas.closest(".fb-dice-drawer__stage");
-    const canvasRect = canvas.getBoundingClientRect();
+    const stage = surface.closest(".fb-dice-drawer__stage");
+    const surfaceRect = surface.getBoundingClientRect();
     const stageRect = stage instanceof HTMLElement ? stage.getBoundingClientRect() : null;
     const isRollerStage =
       stage instanceof HTMLElement &&
@@ -1926,18 +2044,18 @@
       stage.classList.contains("fb-dice-screen-tray__stage");
     const width = Math.max(
       296,
-      Math.round(stageRect?.width || canvasRect.width || canvas.clientWidth || canvas.width || 296)
+      Math.round(stageRect?.width || surfaceRect.width || surface.clientWidth || 296)
     );
     const height = isRollerStage
       ? Math.max(360, width)
       : isScreenTrayStage
         ? Math.max(
           240,
-          Math.round(stageRect?.height || canvasRect.height || canvas.clientHeight || canvas.height || 240)
+          Math.round(stageRect?.height || surfaceRect.height || surface.clientHeight || 240)
         )
         : Math.max(
           152,
-          Math.round(canvasRect.height || canvas.clientHeight || canvas.height || 152)
+          Math.round(surfaceRect.height || surface.clientHeight || 152)
         );
 
     return {
@@ -1946,32 +2064,83 @@
     };
   }
 
-  function resizeDiceVisualizer(visualizer, canvas) {
-    if (!(canvas instanceof HTMLCanvasElement) || !visualizer) {
+  function resizeDiceVisualizer(visualizer, surface) {
+    if (!(surface instanceof HTMLElement) || !visualizer) {
       return;
     }
 
-    const { width, height } = getDiceVisualizerSize(canvas);
+    const { width, height } = getDiceVisualizerSize(surface);
 
-    if (canvas.width !== width) {
-      canvas.width = width;
+    if (typeof visualizer.setDimensions === "function") {
+      visualizer.setDimensions({ x: width, y: height });
+    }
+  }
+
+  function handleDiceVisualizerRollComplete(result) {
+    const handler = diceRuntimeState.visualizerRollCompleteHandler;
+    if (typeof handler !== "function") {
+      return;
     }
 
-    if (canvas.height !== height) {
-      canvas.height = height;
+    try {
+      handler(result);
+    } catch (error) {
+      console.warn("[Further Beyond] Dice completion handler failed.", error);
     }
-
-    if (typeof visualizer.resize === "function") {
-      visualizer.resize(width, height);
-    }
-
-    // Let CSS keep control of the roller footprint after Three.js updates the backing buffer.
-    canvas.style.removeProperty("width");
-    canvas.style.removeProperty("height");
   }
 
   function scheduleDiceVisualizerWarmup(drawer = getDiceVisualizerHost()) {
-    return;
+    if (diceRuntimeState.visualizerLoadPromise || canReuseDiceVisualizer(drawer)) {
+      return diceRuntimeState.visualizerLoadPromise;
+    }
+
+    const DiceBox = getDiceVisualizerFactory();
+    const surface = getDiceVisualizerSurface(drawer);
+    if (!(surface instanceof HTMLElement) || !DiceBox || !isElementVisible(drawer)) {
+      return null;
+    }
+
+    diceRuntimeState.visualizerLoadPromise = (async () => {
+      const visualizer = new DiceBox(`#${surface.id}`, {
+        sounds: false,
+        theme_surface: "green-felt",
+        theme_colorset: "white",
+        theme_texture: "",
+        theme_material: "glass",
+        onRollComplete: (result) => {
+          handleDiceVisualizerRollComplete(result);
+        },
+      });
+
+      await visualizer.initialize();
+      resizeDiceVisualizer(visualizer, surface);
+      diceRuntimeState.visualizer = visualizer;
+      diceRuntimeState.visualizerError = "";
+      return visualizer;
+    })()
+      .catch((error) => {
+        destroyDiceVisualizer(getDiceVisualizerErrorMessage(error));
+        return null;
+      })
+      .finally(() => {
+        diceRuntimeState.visualizerLoadPromise = null;
+      });
+
+    return diceRuntimeState.visualizerLoadPromise;
+  }
+
+  function ensureDiceVisualizer(drawer = getDiceVisualizerHost()) {
+    if (canReuseDiceVisualizer(drawer)) {
+      const surface = getDiceVisualizerSurface(drawer);
+      resizeDiceVisualizer(diceRuntimeState.visualizer, surface);
+      return Promise.resolve(diceRuntimeState.visualizer);
+    }
+
+    if (diceRuntimeState.visualizer) {
+      destroyDiceVisualizer();
+    }
+
+    return Promise.resolve(scheduleDiceVisualizerWarmup(drawer));
   }
 
   function destroyDiceVisualizer(errorMessage = "") {
@@ -1983,83 +2152,65 @@
     const visualizer = diceRuntimeState.visualizer;
     if (visualizer) {
       try {
-        visualizer.disconnect();
+        visualizer.clearDice();
       } catch (_error) {
-        // Ignore disconnect failures during teardown.
+        // Ignore clear failures during teardown.
       }
 
       try {
-        visualizer.stop();
+        visualizer.renderer?.dispose?.();
       } catch (_error) {
-        // Ignore stop failures during teardown.
+        // Ignore renderer disposal failures during teardown.
       }
+
+      visualizer.renderer?.domElement?.remove?.();
     }
 
     diceRuntimeState.visualizer = null;
+    diceRuntimeState.visualizerLoadPromise = null;
+    diceRuntimeState.visualizerRollToken += 1;
+    diceRuntimeState.visualizerRollCompleteHandler = null;
     diceRuntimeState.visualizerToken = "";
     diceRuntimeState.visualizerThemeId = "";
     diceRuntimeState.visualizerError = errorMessage;
+
+    const surface = getDiceVisualizerSurface();
+    if (surface instanceof HTMLElement) {
+      surface.replaceChildren();
+    }
   }
 
   function syncDiceVisualizer(drawer = getDiceVisualizerHost()) {
     const hasSdk = !!getDiceSdk();
-    const hasSession = !!String(diceUiState.authToken || "").trim();
-    const hasRoom = !!normalizeDiceRoomSlug(diceUiState.activeRoomSlug);
-    const hasTheme = !!String(diceUiState.themeId || "").trim();
+    const hasVisualizer = !!getDiceVisualizerFactory();
+    const surface = getDiceVisualizerSurface(drawer);
 
     if (!(drawer instanceof HTMLElement)) {
-      if (diceRuntimeState.visualizerWarmupTimerId !== null) {
-        window.clearTimeout(diceRuntimeState.visualizerWarmupTimerId);
-        diceRuntimeState.visualizerWarmupTimerId = null;
-      }
-      if (diceRuntimeState.visualizer) {
-        destroyDiceVisualizer();
-      }
       return;
     }
 
-    if (!hasSession || !hasRoom || !hasTheme) {
-      if (diceRuntimeState.visualizerWarmupTimerId !== null) {
-        window.clearTimeout(diceRuntimeState.visualizerWarmupTimerId);
-        diceRuntimeState.visualizerWarmupTimerId = null;
-      }
-      if (diceRuntimeState.visualizer) {
-        destroyDiceVisualizer();
-      } else {
-        diceRuntimeState.visualizerError = "";
-      }
-      syncDiceStage(drawer, hasSdk, hasSession, hasRoom);
+    if (!(surface instanceof HTMLElement)) {
       return;
     }
 
-    const canvas = getDiceCanvas(drawer);
-    if (!(canvas instanceof HTMLCanvasElement)) {
-      if (diceRuntimeState.visualizerWarmupTimerId !== null) {
-        window.clearTimeout(diceRuntimeState.visualizerWarmupTimerId);
-        diceRuntimeState.visualizerWarmupTimerId = null;
-      }
-      if (diceRuntimeState.visualizer) {
-        destroyDiceVisualizer();
-      }
-      syncDiceStage(drawer, hasSdk, hasSession, hasRoom);
+    if (!hasSdk || !hasVisualizer) {
+      syncDiceStage(drawer, hasSdk, false, false);
       return;
     }
 
-    if (!diceRuntimeState.visualizer) {
-      scheduleDiceVisualizerWarmup(drawer);
-      syncDiceStage(drawer, hasSdk, hasSession, hasRoom);
+    if (!isElementVisible(drawer)) {
       return;
     }
 
     if (!canReuseDiceVisualizer(drawer)) {
-      destroyDiceVisualizer();
-      syncDiceStage(drawer, hasSdk, hasSession, hasRoom);
+      void ensureDiceVisualizer(drawer);
+      syncDiceStage(drawer, hasSdk, false, false);
       return;
     }
 
-    resizeDiceVisualizer(diceRuntimeState.visualizer, canvas);
+    resizeDiceVisualizer(diceRuntimeState.visualizer, surface);
     diceRuntimeState.visualizerError = "";
-    syncDiceStage(drawer, hasSdk, hasSession, hasRoom);
+    syncDiceStage(drawer, hasSdk, false, false);
   }
 
   function destroyDiceEngine() {
@@ -2498,6 +2649,7 @@
 
   async function submitDiceRollExpression(expression, label, options = {}) {
     const showRollerOutput = options.showRollerOutput !== false;
+    const show3dTray = options.show3dTray !== false;
     const parsedRoll = parseDiceCustomRoll(expression);
 
     updateDiceUiState({
@@ -2518,7 +2670,8 @@
           getDiceRollerPanel() || getDiceDrawer() || getDiceVisualizerHost()
         );
       }
-      appendDiceRollHistory(roll);
+
+      void queueDiceRollPresentation(roll, parsedRoll, { show3dTray });
 
       updateDiceUiState({
         rollPending: false,
@@ -2665,13 +2818,12 @@
     tray.setAttribute("aria-hidden", "true");
     tray.innerHTML = `
       <div class="fb-dice-drawer__stage fb-dice-screen-tray__stage" data-state="idle">
-        <canvas
+        <div
+          id="${DICE_SCREEN_TRAY_SCENE_ID}"
           class="fb-dice-drawer__canvas fb-dice-screen-tray__canvas"
-          data-fb-dice-role="canvas"
-          width="1280"
-          height="720"
+          data-fb-dice-role="visualizer"
           aria-label="Dice tray"
-        ></canvas>
+        ></div>
         <div class="fb-dice-drawer__roll-output fb-dice-screen-tray__roll-output" data-fb-dice-role="roll-output" aria-live="polite" hidden></div>
       </div>
     `;
@@ -3152,7 +3304,7 @@
             <label class="fb-config-modal__toggle" for="fb-settings-dice-enabled">
               <span class="fb-config-modal__copy">
                 <span class="fb-config-modal__label">Further Dice Roller</span>
-                <span class="fb-config-modal__description">Uses Further Beyond's local dice roller on supported character-sheet roll targets and shows roll history in the Game Log.</span>
+                <span class="fb-config-modal__description">Uses Further Beyond's local dice roller on supported character-sheet roll targets, animates predetermined 3D dice, and shows roll history in the Game Log.</span>
               </span>
               <input id="fb-settings-dice-enabled" type="checkbox" />
             </label>
@@ -3183,7 +3335,7 @@
             Use D&amp;D Beyond's bottom-left dice button to open Further Dice Roller. Supported formulas include d20, 2d6 + 3, and 1d20 - 1.
           </p>
           <p class="fb-config-modal__hint">
-            Rolls stay local and appear in the Game Log. External rooms, skins, and account linking are disabled.
+            Rolls stay local, animate on the predetermined 3D tray, and appear in the Game Log. External rooms, skins, and account linking are disabled.
           </p>
         </section>
         <p class="fb-config-modal__status" role="status" aria-live="polite"></p>
@@ -5034,13 +5186,6 @@
     await ensureDiceLocalStateLoaded();
     mountDiceScreenTray();
     mountDiceDrawer();
-    if (
-      String(diceUiState.authToken || "").trim() &&
-      normalizeDiceRoomSlug(diceUiState.activeRoomSlug) &&
-      String(diceUiState.themeId || "").trim()
-    ) {
-      scheduleDiceVisualizerWarmup(getDiceScreenTray());
-    }
     syncDiceSidebarAction(findDiceInfoSidebar());
     mountConfigTrigger();
     await mountShortRestUseHitDieAction();

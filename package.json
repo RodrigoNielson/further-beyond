@@ -1,12 +1,14 @@
 {
   "name": "further-beyond",
-  "version": "0.0.66",
+  "version": "0.0.71",
   "private": true,
   "scripts": {
     "build:sdk": "esbuild src/further-dice-sdk.js --bundle --format=iife --target=chrome120 --external:crypto --outfile=content/further-dice-sdk.js",
+    "dice:box-smoke": "node dev/dice-box-predetermined-smoke.js",
     "roll:d20dist": "node dev/d20-distribution.js"
   },
   "dependencies": {
+    "@3d-dice/dice-box-threejs": "^0.0.12",
     "@dice-roller/rpg-dice-roller": "^5.5.1"
   },
   "devDependencies": {

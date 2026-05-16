@@ -1,5 +1,7 @@
-const { DiceRoll } = require("@dice-roller/rpg-dice-roller/lib/umd/bundle.js");
+import DiceBox from "@3d-dice/dice-box-threejs";
+import { DiceRoll } from "@dice-roller/rpg-dice-roller";
 
 globalThis.__fbFurtherDiceSdk = {
+    DiceBox,
     DiceRoll,
 };

@@ -5,14 +5,14 @@ A Chrome extension that adds a small active indicator, an in-page Further Beyond
 ## Feature Names
 
 - Inventory Manager: slot-based inventory tracking, container handling, coin weight rules, and related character-sheet summaries.
-- Further Dice Roller: local dice rolling, dice-button interception, simple custom rolls, and Game Log output.
+- Further Dice Roller: local dice rolling, dice-button interception, predetermined 3D dice, simple custom rolls, and Game Log output.
 
 ## Features
 
 - Shows a small Further Beyond icon immediately to the left of the character name.
 - Clicking the Further Beyond toolbar icon opens a settings popup for enabled features.
 - Adds a `FURTHER BEYOND` action next to `MANAGE` on character pages and opens an in-page settings window.
-- Adds an optional Further Dice Roller that uses D&D Beyond's dice button and custom simple-roll input, then shows the results in the Game Log.
+- Adds an optional Further Dice Roller that uses D&D Beyond's dice button and custom simple-roll input, animates predetermined 3D dice, and shows the results in the Game Log.
 - Adds a `Use Hit Die` action to the Short Rest sidebar so selected hit dice can be saved without taking a full short rest.
 - Only runs on D&D Beyond character pages under `https://www.dndbeyond.com/characters/*`.
 - Tracks inventory slots on the Inventory page.
@@ -63,7 +63,7 @@ To create a distributable zip for Chrome, run the PowerShell build script from t
 .\build.ps1
 ```
 
-This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.66.zip`.
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.71.zip`.
 
 The build script also refreshes the local Further Dice bundle before packaging.
 

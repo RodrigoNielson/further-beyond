@@ -53,6 +53,10 @@ window.__fbHarness.resetStorage();
    Click the bottom-left D&D Beyond dice button twice.
    Expected: it opens Further Dice Roller both times and never opens D&D Beyond's native `Roll Dice` UI.
 
+10. Predetermined 3D tray
+   Roll one supported dice expression, for example Acrobatics or custom `d20`.
+   Expected: the 3D tray animates the same result already computed by Further Dice Roller, and the on-screen total matches the Game Log/history entry.
+
 ## Record Keeping
 
 Write down the exact character path, the roll targets used, and any mismatch between Further Dice Roller behavior and D&D Beyond native dice behavior before handing work off.
