@@ -1,6 +1,6 @@
 {
   "name": "further-beyond",
-  "version": "0.0.71",
+  "version": "0.0.72",
   "private": true,
   "scripts": {
     "build:sdk": "esbuild src/further-dice-sdk.js --bundle --format=iife --target=chrome120 --external:crypto --outfile=content/further-dice-sdk.js",

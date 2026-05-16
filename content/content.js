@@ -2102,7 +2102,8 @@
 
     diceRuntimeState.visualizerLoadPromise = (async () => {
       const visualizer = new DiceBox(`#${surface.id}`, {
-        sounds: false,
+        assetPath: `${chrome.runtime.getURL("content/dice-box-assets")}/`,
+        sounds: true,
         theme_surface: "green-felt",
         theme_colorset: "white",
         theme_texture: "",
@@ -2111,6 +2112,19 @@
           handleDiceVisualizerRollComplete(result);
         },
       });
+
+      visualizer.loadAudio = function (url) {
+        return new Promise((resolve, reject) => {
+          const audio = new Audio();
+
+          audio.preload = "auto";
+          audio.oncanplaythrough = () => resolve(audio);
+          audio.onerror = (event) => reject(event);
+          audio.src = url;
+        }).catch(() => {
+          console.error("Unable to load audio");
+        });
+      };
 
       await visualizer.initialize();
       resizeDiceVisualizer(visualizer, surface);
