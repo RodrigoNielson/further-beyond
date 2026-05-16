@@ -1,120 +1,101 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Further Beyond Settings</title>
-    <link rel="stylesheet" href="popup.css" />
-  </head>
-  <body>
-    <main class="popup">
-      <header class="popup__header">
-        <p class="popup__eyebrow">Further Beyond</p>
-        <h1>Feature Settings</h1>
-        <p class="popup__intro">
-          Changes save automatically and apply to open D&amp;D Beyond character
-          pages.
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Further Beyond Settings</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+
+<body>
+  <main class="popup">
+    <header class="popup__header">
+      <p class="popup__eyebrow">Further Beyond</p>
+      <h1>Feature Settings</h1>
+      <p class="popup__intro">
+        Changes save automatically and apply to open D&amp;D Beyond character
+        pages.
+      </p>
+    </header>
+
+    <form class="popup__form" id="settings-form">
+      <section class="setting-card">
+        <label class="setting-toggle" for="item-slots-enabled">
+          <span class="setting-copy">
+            <span class="setting-title">Use item slots</span>
+            <span class="setting-description">
+              Shows slot totals, inventory badges, and speed penalties.
+            </span>
+          </span>
+          <input id="item-slots-enabled" name="itemSlotsEnabled" type="checkbox" />
+        </label>
+      </section>
+
+      <section class="setting-card" id="coin-settings-card">
+        <label class="setting-toggle" for="coins-have-weight">
+          <span class="setting-copy">
+            <span class="setting-title">Coins have weight</span>
+            <span class="setting-description">
+              Counts your carried coins toward slot usage.
+            </span>
+          </span>
+          <input id="coins-have-weight" name="coinsHaveWeight" type="checkbox" />
+        </label>
+
+        <label class="setting-field" for="coins-per-slot">
+          <span class="setting-title">Coins per slot</span>
+          <input id="coins-per-slot" name="coinsPerSlot" type="number" inputmode="numeric" min="1" step="1" />
+        </label>
+
+        <p class="setting-hint">
+          Set how many total coins equal one slot when coin weight is enabled.
         </p>
-      </header>
+      </section>
 
-      <form class="popup__form" id="settings-form">
-        <section class="setting-card">
-          <label class="setting-toggle" for="item-slots-enabled">
-            <span class="setting-copy">
-              <span class="setting-title">Use item slots</span>
-              <span class="setting-description">
-                Shows slot totals, inventory badges, and speed penalties.
-              </span>
+      <section class="setting-card">
+        <label class="setting-toggle" for="short-rest-hit-dice-enabled">
+          <span class="setting-copy">
+            <span class="setting-title">Custom short rest hit dice</span>
+            <span class="setting-description">
+              Replaces D&amp;D Beyond's hit-die checkboxes with the Further
+              Beyond persistent version and adds the Use Hit Die action.
             </span>
-            <input
-              id="item-slots-enabled"
-              name="itemSlotsEnabled"
-              type="checkbox"
-            />
-          </label>
-        </section>
+          </span>
+          <input id="short-rest-hit-dice-enabled" name="shortRestHitDiceEnabled" type="checkbox" />
+        </label>
+      </section>
 
-        <section class="setting-card" id="coin-settings-card">
-          <label class="setting-toggle" for="coins-have-weight">
-            <span class="setting-copy">
-              <span class="setting-title">Coins have weight</span>
-              <span class="setting-description">
-                Counts your carried coins toward slot usage.
-              </span>
+      <section class="setting-card">
+        <label class="setting-toggle" for="dice-enabled">
+          <span class="setting-copy">
+            <span class="setting-title">Further Dice Roller</span>
+            <span class="setting-description">
+              Uses Further Beyond's local dice roller on supported
+              character-sheet roll targets and shows the roll history in the
+              Game Log.
             </span>
-            <input
-              id="coins-have-weight"
-              name="coinsHaveWeight"
-              type="checkbox"
-            />
-          </label>
+          </span>
+          <input id="dice-enabled" name="diceEnabled" type="checkbox" />
+        </label>
 
-          <label class="setting-field" for="coins-per-slot">
-            <span class="setting-title">Coins per slot</span>
-            <input
-              id="coins-per-slot"
-              name="coinsPerSlot"
-              type="number"
-              inputmode="numeric"
-              min="1"
-              step="1"
-            />
-          </label>
-
-          <p class="setting-hint">
-            Set how many total coins equal one slot when coin weight is enabled.
-          </p>
-        </section>
-
-        <section class="setting-card">
-          <label class="setting-toggle" for="short-rest-hit-dice-enabled">
-            <span class="setting-copy">
-              <span class="setting-title">Custom short rest hit dice</span>
-              <span class="setting-description">
-                Replaces D&amp;D Beyond's hit-die checkboxes with the Further
-                Beyond persistent version and adds the Use Hit Die action.
-              </span>
+        <label class="setting-toggle" for="dice-suppress-native-dice">
+          <span class="setting-copy">
+            <span class="setting-title">Only show Further Dice Roller rolls</span>
+            <span class="setting-description">
+              When Further Beyond handles a supported native roll button,
+              stop D&amp;D Beyond's own dice from triggering.
             </span>
-            <input
-              id="short-rest-hit-dice-enabled"
-              name="shortRestHitDiceEnabled"
-              type="checkbox"
-            />
-          </label>
-        </section>
+          </span>
+          <input id="dice-suppress-native-dice" name="diceSuppressNativeDice" type="checkbox" />
+        </label>
+      </section>
+    </form>
 
-        <section class="setting-card">
-          <label class="setting-toggle" for="dddice-enabled">
-            <span class="setting-copy">
-              <span class="setting-title">DDDice dice replacement</span>
-              <span class="setting-description">
-                Starts the DDDice integration on supported character-sheet roll
-                targets and shows the Further Beyond roll tray.
-              </span>
-            </span>
-            <input id="dddice-enabled" name="dddiceEnabled" type="checkbox" />
-          </label>
+    <p class="popup__status" id="status" role="status" aria-live="polite"></p>
+  </main>
 
-          <label class="setting-toggle" for="dddice-suppress-native-dice">
-            <span class="setting-copy">
-              <span class="setting-title">Only show DDDice rolls</span>
-              <span class="setting-description">
-                When Further Beyond handles a supported native roll button,
-                stop D&amp;D Beyond's own dice from triggering.
-              </span>
-            </span>
-            <input
-              id="dddice-suppress-native-dice"
-              name="dddiceSuppressNativeDice"
-              type="checkbox"
-            />
-          </label>
-        </section>
-      </form>
+  <script src="popup.js"></script>
+</body>
 
-      <p class="popup__status" id="status" role="status" aria-live="polite"></p>
-    </main>
-
-    <script src="popup.js"></script>
-  </body>
 </html>

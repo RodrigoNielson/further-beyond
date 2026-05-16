@@ -7,8 +7,8 @@
     coinsHaveWeight: true,
     coinsPerSlot: 250,
     shortRestHitDiceEnabled: true,
-    dddiceEnabled: false,
-    dddiceSuppressNativeDice: true,
+    diceEnabled: false,
+    diceSuppressNativeDice: true,
   });
 
   let statusTimeoutId = null;
@@ -29,8 +29,8 @@
         DEFAULT_SETTINGS.coinsPerSlot
       ),
       shortRestHitDiceEnabled: value?.shortRestHitDiceEnabled !== false,
-      dddiceEnabled: value?.dddiceEnabled === true,
-      dddiceSuppressNativeDice: value?.dddiceSuppressNativeDice !== false,
+      diceEnabled: value?.diceEnabled === true,
+      diceSuppressNativeDice: value?.diceSuppressNativeDice !== false,
     };
   }
 
@@ -137,9 +137,9 @@
     const shortRestHitDiceEnabled = document.getElementById(
       "short-rest-hit-dice-enabled"
     );
-    const dddiceEnabled = document.getElementById("dddice-enabled");
-    const dddiceSuppressNativeDice = document.getElementById(
-      "dddice-suppress-native-dice"
+    const diceEnabled = document.getElementById("dice-enabled");
+    const diceSuppressNativeDice = document.getElementById(
+      "dice-suppress-native-dice"
     );
 
     if (itemSlotsEnabled) {
@@ -158,12 +158,12 @@
       shortRestHitDiceEnabled.checked = !!settings.shortRestHitDiceEnabled;
     }
 
-    if (dddiceEnabled) {
-      dddiceEnabled.checked = !!settings.dddiceEnabled;
+    if (diceEnabled) {
+      diceEnabled.checked = !!settings.diceEnabled;
     }
 
-    if (dddiceSuppressNativeDice) {
-      dddiceSuppressNativeDice.checked = !!settings.dddiceSuppressNativeDice;
+    if (diceSuppressNativeDice) {
+      diceSuppressNativeDice.checked = !!settings.diceSuppressNativeDice;
     }
 
     updateDisabledState(settings);
@@ -183,12 +183,12 @@
       shortRestHitDiceEnabled:
         document.getElementById("short-rest-hit-dice-enabled")?.checked ??
         DEFAULT_SETTINGS.shortRestHitDiceEnabled,
-      dddiceEnabled:
-        document.getElementById("dddice-enabled")?.checked ??
-        DEFAULT_SETTINGS.dddiceEnabled,
-      dddiceSuppressNativeDice:
-        document.getElementById("dddice-suppress-native-dice")?.checked ??
-        DEFAULT_SETTINGS.dddiceSuppressNativeDice,
+      diceEnabled:
+        document.getElementById("dice-enabled")?.checked ??
+        DEFAULT_SETTINGS.diceEnabled,
+      diceSuppressNativeDice:
+        document.getElementById("dice-suppress-native-dice")?.checked ??
+        DEFAULT_SETTINGS.diceSuppressNativeDice,
     });
   }
 

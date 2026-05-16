@@ -234,7 +234,7 @@
   };
 
   injectStyle("content/content.css");
-  injectScript("content/dddice-sdk.js")
+  injectScript("content/further-dice-sdk.js")
     .then(() => injectScript("content/content.js"))
     .then(() => {
       console.log("[Further Beyond Harness] Injected Further Beyond content script.");

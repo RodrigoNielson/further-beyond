@@ -4,7 +4,7 @@ This harness lets you test the live repo files on a real D&D Beyond page without
 
 ## What it does
 
-- Loads `content/content.css`, `content/dddice-sdk.js`, and `content/content.js` from a local static server.
+- Loads `content/content.css`, `content/further-dice-sdk.js`, and `content/content.js` from a local static server.
 - Shims the `chrome.runtime` and `chrome.storage` APIs that the content script expects.
 - Lets the page bridge load through the shimmed `chrome.runtime.getURL(...)` path.
 - Persists shimmed storage in `localStorage` so refreshes behave more like the extension.
@@ -15,6 +15,8 @@ This harness lets you test the live repo files on a real D&D Beyond page without
 2. Open a D&D Beyond character page.
 3. Inject the harness script from the browser console.
 4. Exercise the feature directly on the page.
+
+For Further Dice Roller changes, run the checklist in `dev/further-dice-roller-test-plan.md` after the harness is loaded.
 
 ## Example server commands
 
@@ -30,7 +32,7 @@ PowerShell with Node:
 npx serve . -l 4173
 ```
 
-If `content/dddice-sdk.js` is missing or stale, rebuild it first:
+If `content/further-dice-sdk.js` is missing or stale, rebuild it first:
 
 ```powershell
 npm install

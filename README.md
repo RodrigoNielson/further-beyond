@@ -2,12 +2,17 @@
 
 A Chrome extension that adds a small active indicator, an in-page Further Beyond settings button, a configurable toolbar popup, and slot-based inventory tracking on D&D Beyond character sheets.
 
+## Feature Names
+
+- Inventory Manager: slot-based inventory tracking, container handling, coin weight rules, and related character-sheet summaries.
+- Further Dice Roller: local dice rolling, dice-button interception, simple custom rolls, and Game Log output.
+
 ## Features
 
 - Shows a small Further Beyond icon immediately to the left of the character name.
 - Clicking the Further Beyond toolbar icon opens a settings popup for enabled features.
 - Adds a `FURTHER BEYOND` action next to `MANAGE` on character pages and opens an in-page settings window.
-- Adds an optional DDDice integration that keeps roll history in D&D Beyond's native Game Log, moves room/session setup into the Further Beyond menu, and uses D&D Beyond's dice button for a custom DDDice roller.
+- Adds an optional Further Dice Roller that uses D&D Beyond's dice button and custom simple-roll input, then shows the results in the Game Log.
 - Adds a `Use Hit Die` action to the Short Rest sidebar so selected hit dice can be saved without taking a full short rest.
 - Only runs on D&D Beyond character pages under `https://www.dndbeyond.com/characters/*`.
 - Tracks inventory slots on the Inventory page.
@@ -30,7 +35,16 @@ A Chrome extension that adds a small active indicator, an in-page Further Beyond
 
 ## Development
 
-The page UI is still plain HTML, CSS, and JavaScript, but the DDDice SDK is bundled locally for the content script.
+The page UI is still plain HTML, CSS, and JavaScript, and the Further Dice Roller bundle is built locally for the content script.
+
+When you add or edit a feature, use this workflow:
+
+1. Use the canonical feature name so the change is easy to reference.
+2. Test on your own D&D Beyond character path.
+3. Create or extend a small helper under dev/ so the feature has its own path to test and expand.
+4. Use dev/browser-harness.md for live content-script testing.
+5. For Further Dice Roller changes, run dev/further-dice-roller-test-plan.md before handing work off.
+6. Rebuild the affected bundle before loading the extension.
 
 ```powershell
 npm install
@@ -41,15 +55,17 @@ After that bundle exists, you can load the repo unpacked in Chrome during develo
 
 ## Packaging
 
+Before building a new extension package, increment the patch version in both manifest.json and package.json.
+
 To create a distributable zip for Chrome, run the PowerShell build script from the project root:
 
 ```powershell
 .\build.ps1
 ```
 
-This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.47.zip`.
+This creates a versioned zip file in `dist/`, for example `dist/further-beyond-0.0.66.zip`.
 
-The build script also refreshes the local DDDice SDK bundle before packaging.
+The build script also refreshes the local Further Dice bundle before packaging.
 
 ```
 further-beyond/

@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Further Beyond",
-  "version": "0.0.60",
+  "version": "0.0.66",
   "description": "Adds character-page indicators and slot-based inventory tracking on D&D Beyond.",
-  "permissions": ["storage"],
-  "host_permissions": ["https://dddice.com/*"],
+  "permissions": [
+    "storage"
+  ],
   "action": {
     "default_icon": {
       "16": "icons/icon16.png",
@@ -17,16 +18,28 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.dndbeyond.com/characters/*"],
-      "js": ["content/dddice-sdk.js", "content/content.js"],
-      "css": ["content/content.css"],
+      "matches": [
+        "https://www.dndbeyond.com/characters/*"
+      ],
+      "js": [
+        "content/further-dice-sdk.js",
+        "content/content.js"
+      ],
+      "css": [
+        "content/content.css"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/wizard.png", "content/page-bridge.js"],
-      "matches": ["https://www.dndbeyond.com/*"]
+      "resources": [
+        "icons/wizard.png",
+        "content/page-bridge.js"
+      ],
+      "matches": [
+        "https://www.dndbeyond.com/*"
+      ]
     }
   ],
   "icons": {

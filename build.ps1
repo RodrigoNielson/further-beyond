@@ -11,7 +11,7 @@ if (Test-Path (Join-Path $root "package.json")) {
     & npm.cmd run build:sdk
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to build the DDDice SDK bundle."
+        throw "Failed to build the Further Dice bundle."
     }
 }
 

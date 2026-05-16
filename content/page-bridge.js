@@ -272,7 +272,7 @@
     }
 
     const button = document.querySelector(
-      `[data-fb-dddice-target="${token}"]`
+      `[data-fb-dice-target="${token}"]`
     );
     if (!(button instanceof HTMLButtonElement)) {
       return null;
